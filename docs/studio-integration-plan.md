@@ -1,31 +1,52 @@
-# TypeDB Studio Integration Plan
+# TypeDB Studio Integration
 
-This document outlines the plan to bundle TypeDB Studio as a static site served by the TypeDB server.
+TypeDB Studio is embedded directly into the TypeDB server binary and served automatically when the HTTP endpoint is enabled.
 
-## Implementation Status
+## Quick Start
 
-### ✅ Phase 1: Basic Static File Serving (Complete)
+Studio is available at **http://localhost:8000/studio/** by default when you start the server.
 
-| Item | Status | Location |
-|------|--------|----------|
-| Add Studio as git submodule | ✅ Done | `studio/` |
-| Enable `fs` feature on tower-http | ✅ Done | `server/Cargo.toml` |
-| Add `StudioConfig` to server config | ✅ Done | `server/parameters/config.rs` |
-| Add `/studio` routes with ServeDir | ✅ Done | `server/service/http/studio.rs` |
-| Merge Studio router in serve_http | ✅ Done | `server/lib.rs` |
-| Add "embedded" Angular config | ✅ Done | `studio/angular.json` |
-| Create build script | ✅ Done | `scripts/build-studio.sh` |
+No additional configuration required.
 
-### 🔲 Phase 2: Production Ready (Pending)
+## Building Studio
 
-| Item | Status | Notes |
-|------|--------|-------|
-| Build and test full Studio integration | 🔲 Todo | Run `./scripts/build-studio.sh` |
-| Add compression (gzip/brotli) | 🔲 Todo | Optional performance improvement |
-| Add cache headers for hashed assets | 🔲 Todo | Optional performance improvement |
-| Consider rust-embed for single binary | 🔲 Todo | Optional, behind feature flag |
+To update the embedded Studio assets:
 
-## Current Architecture
+```bash
+# Build Studio and copy to server/assets/studio/
+./scripts/build-studio.sh
+
+# Rebuild the server to embed the new assets
+cargo build
+```
+
+## Configuration
+
+### Changing the Base Path
+
+If you're running TypeDB behind a reverse proxy with a different path, you can customize the Studio base path:
+
+**Via config.yml:**
+```yaml
+server:
+  http:
+    enabled: true
+    address: 0.0.0.0:8000
+    studio:
+      base-path: /ui/  # or /typedb-studio/ or any path you need
+```
+
+**Via CLI:**
+```bash
+cargo run -- --server.http.studio.base-path /my-custom-path/
+```
+
+The base path:
+- Must start with `/`
+- Will automatically have a trailing `/` added if missing
+- Is substituted into the Angular app's `<base href>` at runtime
+
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -36,115 +57,54 @@ This document outlines the plan to bundle TypeDB Studio as a static site served 
 │  │                                           │   │
 │  │  /v1/*           → TypeDB HTTP API        │   │
 │  │  /health         → Health check           │   │
-│  │  /studio/        → Static files (Studio)  │   │
+│  │  /studio/        → Embedded Studio UI     │   │
 │  │  /studio/*       → SPA fallback           │   │
 │  └──────────────────────────────────────────┘   │
 │                                                  │
 │  ┌────────────────┐    ┌─────────────────────┐  │
-│  │  gRPC Service  │    │  Studio Assets      │  │
-│  │  (port 1729)   │    │  (from disk)        │  │
+│  │  gRPC Service  │    │  Embedded Assets    │  │
+│  │  (port 1729)   │    │  (rust-embed)       │  │
 │  └────────────────┘    └─────────────────────┘  │
 └─────────────────────────────────────────────────┘
 ```
 
-## Quick Start
-
-### 1. Build Studio
-```bash
-./scripts/build-studio.sh
-```
-
-### 2. Enable in config.yml
-```yaml
-server:
-  http:
-    enabled: true
-    address: 0.0.0.0:8000
-    studio:
-      enabled: true
-      directory: assets/studio
-```
-
-### 3. Run the server
-```bash
-cargo run
-```
-
-### 4. Access Studio
-Open `http://localhost:8000/studio/` in your browser.
-
-## Configuration
-
-### Server Config (config.yml)
-
-```yaml
-server:
-  http:
-    studio:
-      enabled: false          # Set to true to enable Studio
-      directory:              # Path to Studio build output (relative to binary)
-```
-
-### Angular Build Configurations
-
-| Config | Base Href | Use Case |
-|--------|-----------|----------|
-| `production` | `/` | Standalone deployment (Netlify, etc.) |
-| `embedded` | `/studio/` | Embedded in TypeDB server |
-| `development` | `/` | Local development with ng serve |
-
-Build for embedding:
-```bash
-cd studio
-pnpm run build -c embedded
-```
-
 ## How It Works
 
-1. **Studio uses `@typedb/driver-http`**: The Angular app connects to TypeDB via HTTP API using connection URLs like `typedb://user:pass@localhost:8000/mydb`
+1. **Compile-time embedding**: Studio assets are embedded into the binary using `rust-embed` from `server/assets/studio/`
 
-2. **Same-origin requests**: When served from the TypeDB server, Studio naturally connects to the same server—no CORS issues
+2. **Runtime base href substitution**: The `<base href="/studio/">` in index.html is replaced with the configured path at startup
 
-3. **SPA routing**: The `ServeDir` fallback ensures client-side routes like `/studio/query` return `index.html`
+3. **SPA routing**: All unmatched paths under the studio route return index.html for client-side routing
 
-4. **No auth on static files**: Studio assets are served without authentication; the API endpoints still require JWT tokens
+4. **No authentication on static files**: Studio assets are served without JWT; API calls from Studio still require authentication
 
-## Files Changed
+## Files
 
-### Server (Rust)
-- `server/Cargo.toml` - Added `fs` feature to tower-http
-- `server/parameters/config.rs` - Added `StudioConfig` struct
-- `server/config.yml` - Added studio config section
-- `server/service/http/mod.rs` - Added studio module
-- `server/service/http/studio.rs` - New module for static file serving
-- `server/lib.rs` - Modified `serve_http()` to include studio router
+| File | Purpose |
+|------|---------|
+| `server/assets/studio/` | Embedded Studio build output |
+| `server/service/http/studio.rs` | Studio serving logic |
+| `scripts/build-studio.sh` | Build script |
+| `studio/` | Studio source (git submodule) |
 
-### Studio (Angular)
-- `studio/angular.json` - Added "embedded" build configuration with `/studio/` base href
+## Reverse Proxy Example
 
-### Scripts
-- `scripts/build-studio.sh` - Build script for embedding
+If you're running behind nginx at `/typedb/`:
 
-## Future Improvements
-
-### Option A: Embedded Assets (rust-embed)
-Embed Studio into the binary at compile time:
-```rust
-#[derive(rust_embed::RustEmbed)]
-#[folder = "assets/studio/"]
-struct StudioAssets;
+```nginx
+location /typedb/ {
+    proxy_pass http://localhost:8000/typedb/;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+}
 ```
 
-Pros: Single binary, no external files
-Cons: Larger binary, requires rebuild to update Studio
-
-### Compression
-Add tower-http compression layer:
-```rust
-use tower_http::compression::CompressionLayer;
-
-router.layer(CompressionLayer::new())
+With config:
+```yaml
+server:
+  http:
+    studio:
+      base-path: /typedb/studio/
 ```
-
-### Cache Headers
-Set long cache times for hashed assets, short for index.html.

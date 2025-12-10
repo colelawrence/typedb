@@ -81,6 +81,11 @@ pub struct CLIArgs {
     /// logging, restricted functionalities, and reduced performance
     #[arg(long = "development-mode.enabled", hide = true)]
     pub development_mode_enabled: Option<bool>,
+
+    /// Base path for Studio UI (default: /studio/)
+    /// Useful when running behind a reverse proxy
+    #[arg(long = "server.http.studio.base-path")]
+    pub server_http_studio_base_path: Option<String>,
 }
 
 impl CLIArgs {

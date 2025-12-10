@@ -4,9 +4,11 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+use std::sync::Arc;
+
 use axum::{
     body::Body,
-    extract::Path,
+    extract::{Path, State},
     http::{header, StatusCode},
     response::{IntoResponse, Redirect, Response},
     routing::get,
@@ -18,26 +20,76 @@ use rust_embed::RustEmbed;
 #[folder = "assets/studio/"]
 struct StudioAssets;
 
-pub(crate) fn create_studio_router() -> Router {
-    Router::new()
-        .route("/studio", get(redirect_to_studio_with_slash))
-        .route("/studio/", get(serve_index))
-        .route("/studio/*path", get(serve_embedded_file))
+/// Default base path for Studio (must match Angular's embedded build baseHref)
+const DEFAULT_BASE_PATH: &str = "/studio/";
+
+#[derive(Clone)]
+pub struct StudioConfig {
+    /// The base path where Studio is served (e.g., "/studio/" or "/ui/")
+    pub base_path: String,
+    /// Cached index.html with substituted base href
+    index_html: Arc<String>,
 }
 
-async fn redirect_to_studio_with_slash() -> impl IntoResponse {
-    Redirect::permanent("/studio/")
+impl StudioConfig {
+    pub fn new(base_path: Option<String>) -> Option<Self> {
+        let index_content = StudioAssets::get("index.html")?;
+        let index_str = String::from_utf8_lossy(&index_content.data);
+        
+        let base_path = base_path.unwrap_or_else(|| DEFAULT_BASE_PATH.to_string());
+        // Ensure base_path has trailing slash
+        let base_path = if base_path.ends_with('/') {
+            base_path
+        } else {
+            format!("{}/", base_path)
+        };
+        
+        // Replace the compiled-in base href with the configured one
+        let index_html = index_str.replace(
+            &format!("<base href=\"{}\">", DEFAULT_BASE_PATH),
+            &format!("<base href=\"{}\">", base_path),
+        );
+        
+        Some(Self {
+            base_path,
+            index_html: Arc::new(index_html),
+        })
+    }
 }
 
-async fn serve_index() -> impl IntoResponse {
-    serve_file("index.html")
+pub(crate) fn create_studio_router(base_path: Option<String>) -> Option<Router> {
+    let config = StudioConfig::new(base_path)?;
+    let path = config.base_path.trim_end_matches('/');
+    
+    Some(
+        Router::new()
+            .route(&path, get(redirect_to_with_slash))
+            .route(&format!("{}/", path), get(serve_index))
+            .route(&format!("{}/*path", path), get(serve_embedded_file))
+            .with_state(config),
+    )
 }
 
-async fn serve_embedded_file(Path(path): Path<String>) -> impl IntoResponse {
-    serve_file(&path)
+async fn redirect_to_with_slash(State(config): State<StudioConfig>) -> impl IntoResponse {
+    Redirect::permanent(&config.base_path)
 }
 
-fn serve_file(path: &str) -> Response {
+async fn serve_index(State(config): State<StudioConfig>) -> impl IntoResponse {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+        .body(Body::from(config.index_html.as_bytes().to_vec()))
+        .unwrap()
+}
+
+async fn serve_embedded_file(
+    State(config): State<StudioConfig>,
+    Path(path): Path<String>,
+) -> impl IntoResponse {
+    serve_file(&config, &path)
+}
+
+fn serve_file(config: &StudioConfig, path: &str) -> Response {
     match StudioAssets::get(path) {
         Some(content) => {
             let mime = mime_guess::from_path(path).first_or_octet_stream();
@@ -49,17 +101,11 @@ fn serve_file(path: &str) -> Response {
         }
         None => {
             // SPA fallback: serve index.html for client-side routing
-            match StudioAssets::get("index.html") {
-                Some(content) => Response::builder()
-                    .status(StatusCode::OK)
-                    .header(header::CONTENT_TYPE, "text/html")
-                    .body(Body::from(content.data.into_owned()))
-                    .unwrap(),
-                None => Response::builder()
-                    .status(StatusCode::NOT_FOUND)
-                    .body(Body::from("Studio assets not found"))
-                    .unwrap(),
-            }
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+                .body(Body::from(config.index_html.as_bytes().to_vec()))
+                .unwrap()
         }
     }
 }

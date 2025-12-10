@@ -44,6 +44,16 @@ pub struct ServerConfig {
 pub struct HttpEndpointConfig {
     pub(crate) enabled: bool,
     pub(crate) address: String,
+    #[serde(default)]
+    pub(crate) studio: StudioConfig,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct StudioConfig {
+    /// Base path for Studio UI (default: "/studio/")
+    /// Useful when running behind a reverse proxy with a different path
+    pub base_path: Option<String>,
 }
 
 #[serde_as]
@@ -191,6 +201,7 @@ impl ConfigBuilder {
             diagnostics_monitoring_enabled,
             diagnostics_monitoring_port,
             development_mode_enabled,
+            server_http_studio_base_path,
         } = cliargs;
         let Self { config } = self;
         override_config! {
@@ -213,6 +224,8 @@ impl ConfigBuilder {
             config.diagnostics.monitoring.port => diagnostics_monitoring_port;
 
             config.development_mode.enabled => development_mode_enabled;
+
+            config.server.http.studio.base_path => server_http_studio_base_path.map(Some);
         }
     }
 

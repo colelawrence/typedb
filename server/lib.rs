@@ -112,12 +112,14 @@ impl Server {
             self.server_state.clone(),
             self.shutdown_receiver.clone(),
         );
+        let studio_base_path = self.config.server.http.studio.base_path.clone();
         let studio_enabled = http::studio::has_embedded_assets();
         let http_server = if let Some(http_address) = http_address_opt {
             let server = Self::serve_http(
                 self.server_info,
                 http_address,
                 &self.config.server.encryption,
+                studio_base_path.clone(),
                 self.server_state.clone(),
                 self.shutdown_receiver,
             );
@@ -126,11 +128,13 @@ impl Server {
             None
         };
 
+        let studio_path = studio_base_path.as_deref().unwrap_or("/studio/");
         Self::print_serving_information(
             grpc_address,
             http_address_opt,
             &self.config.server.encryption,
             studio_enabled,
+            studio_path,
         );
 
         Self::spawn_shutdown_handler(self.shutdown_sender);
@@ -174,6 +178,7 @@ impl Server {
         server_info: ServerInfo,
         address: SocketAddr,
         encryption_config: &EncryptionConfig,
+        studio_base_path: Option<String>,
         server_state: Arc<BoxServerState>,
         mut shutdown_receiver: Receiver<()>,
     ) -> Result<(), ServerOpenError> {
@@ -186,8 +191,8 @@ impl Server {
             .layer(authenticator)
             .merge(http::typedb_service::TypeDBService::create_unprotected_router(http_service));
 
-        if http::studio::has_embedded_assets() {
-            router = router.merge(http::studio::create_studio_router());
+        if let Some(studio_router) = http::studio::create_studio_router(studio_base_path) {
+            router = router.merge(studio_router);
         }
 
         let router_service = router
@@ -246,6 +251,7 @@ impl Server {
         http_address: Option<SocketAddr>,
         encryption_config: &EncryptionConfig,
         studio_enabled: bool,
+        studio_path: &str,
     ) {
         if encryption_config.enabled {
             print!("Serving gRPC on {grpc_address}");
@@ -269,7 +275,7 @@ impl Server {
                 let scheme = if encryption_config.enabled { "https" } else { "http" };
                 let host = if http_address.ip().is_unspecified() { "localhost" } else { &http_address.ip().to_string() };
                 println!();
-                println!("Studio UI:  {scheme}://{host}:{}/studio/", http_address.port());
+                println!("Studio UI:  {scheme}://{host}:{}{studio_path}", http_address.port());
             }
         }
 
