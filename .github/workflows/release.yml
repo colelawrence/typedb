@@ -1,0 +1,137 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - cole
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v0.1.0)'
+        required: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-studio:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+          cache-dependency-path: studio/pnpm-lock.yaml
+
+      - name: Build Studio
+        run: ./scripts/build-studio.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: studio-assets
+          path: server/assets/studio/
+
+  build:
+    needs: build-studio
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: typedb-server-linux-x86_64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact: typedb-server-linux-arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: typedb-server-macos-x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: typedb-server-macos-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: typedb-server-windows-x86_64
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: studio-assets
+          path: server/assets/studio/
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (Linux ARM64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist/${{ matrix.artifact }}/server
+          cp target/${{ matrix.target }}/release/typedb_server_bin dist/${{ matrix.artifact }}/server/
+          cp server/config.yml dist/${{ matrix.artifact }}/server/
+          cp binary/typedb dist/${{ matrix.artifact }}/
+          chmod +x dist/${{ matrix.artifact }}/typedb
+          cp LICENSE dist/${{ matrix.artifact }}/
+          mkdir -p dist/${{ matrix.artifact }}/server/data
+          cd dist && tar -czvf ${{ matrix.artifact }}.tar.gz ${{ matrix.artifact }}
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/${{ matrix.artifact }}/server
+          Copy-Item target/${{ matrix.target }}/release/typedb_server_bin.exe dist/${{ matrix.artifact }}/server/
+          Copy-Item server/config.yml dist/${{ matrix.artifact }}/server/
+          Copy-Item binary/typedb.bat dist/${{ matrix.artifact }}/
+          Copy-Item LICENSE dist/${{ matrix.artifact }}/
+          New-Item -ItemType Directory -Force -Path dist/${{ matrix.artifact }}/server/data
+          Compress-Archive -Path dist/${{ matrix.artifact }} -DestinationPath dist/${{ matrix.artifact }}.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}.*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: TypeDB ${{ github.ref_name }}
+          body_path: RELEASE_NOTES_LATEST.md
+          files: artifacts/*
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}

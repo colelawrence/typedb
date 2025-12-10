@@ -3,57 +3,42 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-# TypeDB global variables
-[[ $(readlink -f $0) ]] && path=$(readlink -f $0) || path=$0
-TYPEDB_HOME=$(cd "$(dirname "${path}")" && pwd -P)
+set -euo pipefail
 
-
-if [ -d "${TYPEDB_HOME}/console" ]; then
-  CONSOLE_EXISTS=1
+# Resolve symlinks to find the real script location
+if command -v realpath &> /dev/null; then
+    SCRIPT_PATH=$(realpath "$0")
+else
+    SCRIPT_PATH="$0"
 fi
-
-# ================================================
-# common helper functions
-# ================================================
+TYPEDB_HOME=$(cd "$(dirname "$SCRIPT_PATH")" && pwd -P)
 
 print_usage() {
-    echo "  Server:          typedb server [--help]"
-    if [[ $CONSOLE_EXISTS ]]; then
-      echo "  Console:         typedb console [--help]"
-    fi
+    echo "Usage: typedb <command> [options]"
+    echo ""
+    echo "Commands:"
+    echo "  server    Start the TypeDB server"
+    echo ""
+    echo "Run 'typedb server --help' for server options."
 }
 
-# =============================================
-# main routine
-# =============================================
-
-
-case "$1" in
-    console)
-        if [[ ! $CONSOLE_EXISTS ]]; then
-            echo "TypeDB console was not included in this distribution. Please download it separately."
-            exit 1
-        fi
-        # exec replaces current shell process so no commands after this one will ever get executed
-        TYPEDB_CONSOLE_BIN="${TYPEDB_HOME}/console/typedb_console_bin"
-        exec ${TYPEDB_CONSOLE_BIN} "${@:2}"
-        ;;
-
+case "${1:-}" in
     server)
-        # exec replaces current shell process so no commands after these ones will ever get executed
         TYPEDB_SERVER_BIN="${TYPEDB_HOME}/server/typedb_server_bin"
-        exec ${TYPEDB_SERVER_BIN} "${@:2}"
+        exec "$TYPEDB_SERVER_BIN" "${@:2}"
         ;;
-
+    -h|--help|help)
+        print_usage
+        exit 0
+        ;;
     "")
-        echo "Missing argument. Possible commands are:"
         print_usage
         exit 1
         ;;
     *)
-        echo "Invalid argument: $1. Possible commands are: "
+        echo "Error: Unknown command '$1'"
+        echo ""
         print_usage
         exit 1
         ;;
-    esac
-fi
+esac
