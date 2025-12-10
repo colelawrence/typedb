@@ -48,12 +48,28 @@ pub struct HttpEndpointConfig {
     pub(crate) studio: StudioConfig,
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct StudioConfig {
     /// Base path for Studio UI (default: "/studio/")
     /// Useful when running behind a reverse proxy with a different path
     pub base_path: Option<String>,
+    /// Whether to include an auto-login token in the Studio URL printed at startup.
+    /// When enabled, the URL will contain a JWT hash fragment that allows automatic authentication.
+    #[serde(default = "StudioConfig::default_auto_login_token")]
+    pub auto_login_token: bool,
+}
+
+impl StudioConfig {
+    fn default_auto_login_token() -> bool {
+        true
+    }
+}
+
+impl Default for StudioConfig {
+    fn default() -> Self {
+        Self { base_path: None, auto_login_token: Self::default_auto_login_token() }
+    }
 }
 
 #[serde_as]
@@ -189,6 +205,7 @@ impl ConfigBuilder {
             server_address,
             server_http_enabled,
             server_http_address,
+            server_http_studio_auto_login_token,
             server_authentication_token_expiration_seconds,
             server_encryption_enabled,
             server_encryption_certificate,
@@ -208,6 +225,7 @@ impl ConfigBuilder {
             config.server.address => server_address;
             config.server.http.enabled => server_http_enabled;
             config.server.http.address => server_http_address;
+            config.server.http.studio.auto_login_token => server_http_studio_auto_login_token;
             config.server.authentication.token_expiration => server_authentication_token_expiration_seconds.map(|secs| Duration::new(secs, 0));
 
             config.server.encryption.enabled => server_encryption_enabled;

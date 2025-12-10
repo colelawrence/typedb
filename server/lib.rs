@@ -13,7 +13,7 @@ use std::{net::SocketAddr, sync::Arc};
 use axum_server::{tls_rustls::RustlsConfig, Handle};
 use database::database_manager::DatabaseManager;
 use resource::{
-    constants::server::{GRPC_CONNECTION_KEEPALIVE, SERVER_INFO},
+    constants::server::{DEFAULT_USER_NAME, GRPC_CONNECTION_KEEPALIVE, SERVER_INFO},
     server_info::ServerInfo,
 };
 use tokio::{
@@ -129,12 +129,23 @@ impl Server {
         };
 
         let studio_path = studio_base_path.as_deref().unwrap_or("/studio/");
+
+        // Generate auto-login token for Studio URL if enabled
+        let studio_auto_login_token = if studio_enabled
+            && http_address_opt.is_some()
+            && self.config.server.http.studio.auto_login_token
+        {
+            Some(self.server_state.token_create_for_startup(DEFAULT_USER_NAME.to_string()).await)
+        } else {
+            None
+        };
         Self::print_serving_information(
             grpc_address,
             http_address_opt,
             &self.config.server.encryption,
             studio_enabled,
             studio_path,
+            studio_auto_login_token,
         );
 
         Self::spawn_shutdown_handler(self.shutdown_sender);
@@ -252,6 +263,7 @@ impl Server {
         encryption_config: &EncryptionConfig,
         studio_enabled: bool,
         studio_path: &str,
+        studio_auto_login_token: Option<String>,
     ) {
         if encryption_config.enabled {
             print!("Serving gRPC on {grpc_address}");
@@ -274,8 +286,12 @@ impl Server {
             if let Some(http_address) = http_address {
                 let scheme = if encryption_config.enabled { "https" } else { "http" };
                 let host = if http_address.ip().is_unspecified() { "localhost" } else { &http_address.ip().to_string() };
+                let hash_fragment = match &studio_auto_login_token {
+                    Some(token) => format!("#{token}"),
+                    None => String::new(),
+                };
                 println!();
-                println!("Studio UI:  {scheme}://{host}:{}{studio_path}", http_address.port());
+                println!("Studio UI:  {scheme}://{host}:{}{studio_path}{hash_fragment}", http_address.port());
             }
         }
 

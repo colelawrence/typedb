@@ -30,6 +30,11 @@ pub struct CLIArgs {
     #[arg(long = "server.http.address")]
     pub server_http_address: Option<String>,
 
+    /// Enable/disable including an auto-login token in the Studio URL printed at startup.
+    /// When enabled, the URL will contain a JWT hash fragment that allows automatic authentication.
+    #[arg(long = "server.http.studio.auto-login-token")]
+    pub server_http_studio_auto_login_token: Option<bool>,
+
     /// The amount of seconds generated authentication tokens will remain valid, specified in seconds.
     /// Use smaller values for better security and bigger values for better authentication performance and convenience
     /// (min: 1 second, max: 1 year).

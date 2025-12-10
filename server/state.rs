@@ -91,6 +91,10 @@ pub trait ServerState: Debug {
 
     async fn token_get_owner(&self, token: &str) -> Option<String>;
 
+    /// Creates a token for the given username without password verification.
+    /// This is used for generating the auto-login token printed in the Studio URL at startup.
+    async fn token_create_for_startup(&self, username: String) -> String;
+
     fn server_info(&self) -> ServerInfo;
 
     fn database_manager(&self) -> Arc<DatabaseManager>;
@@ -393,6 +397,10 @@ impl ServerState for LocalServerState {
 
     async fn token_get_owner(&self, token: &str) -> Option<String> {
         self.token_manager.get_valid_token_owner(token).await
+    }
+
+    async fn token_create_for_startup(&self, username: String) -> String {
+        self.token_manager.new_token(username).await
     }
 
     fn server_info(&self) -> ServerInfo {
