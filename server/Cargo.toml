@@ -176,7 +176,7 @@ dev-dependencies = {}
 
 	[dependencies.storage]
 		path = "../storage"
-		features = []
+		features = ["rocksdb"]  # Required for RocksDB storage backend
 		default-features = false
 
 	[dependencies.error]
@@ -225,7 +225,7 @@ dev-dependencies = {}
 		default-features = false
 
 	[dependencies.tower-http]
-		features = ["cors", "default"]
+		features = ["cors", "default", "fs"]
 		version = "0.6.6"
 		default-features = false
 
@@ -293,4 +293,11 @@ dev-dependencies = {}
 		features = ["alloc", "default", "indexmap", "preserve_order", "raw_value", "std"]
 		version = "1.0.143"
 		default-features = false
+
+	[dependencies.rust-embed]
+		version = "8"
+		features = ["mime_guess"]
+
+	[dependencies.mime_guess]
+		version = "2"
 

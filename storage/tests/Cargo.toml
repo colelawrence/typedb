@@ -36,6 +36,6 @@ features = {}
 
 	[dependencies.storage]
 		path = "../../storage"
-		features = []
+		features = ["rocksdb"]  # Required for RocksDB storage backend
 		default-features = false
 

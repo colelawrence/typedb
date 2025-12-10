@@ -9,14 +9,120 @@ use annotations::{encode_analyzed_fetch, encode_analyzed_function, FetchStructur
 use axum::response::{IntoResponse, Response};
 use http::StatusCode;
 use query::analyse::AnalysedQuery;
+pub use schema::AnalyzedSchemaResponse;
 use serde::{Deserialize, Serialize};
 use storage::snapshot::ReadableSnapshot;
 use structure::{encode_analyzed_pipeline, AnalyzedFunctionResponse, AnalyzedPipelineResponse};
+use typeql::common::{Span, Spannable};
 
 use crate::service::http::message::body::JsonBody;
 
 pub mod annotations;
+pub mod schema;
 pub mod structure;
+
+// Diagnostic types for structured error reporting
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticSpan {
+    pub begin: usize,
+    pub end: usize,
+}
+
+impl From<Span> for DiagnosticSpan {
+    fn from(span: Span) -> Self {
+        Self { begin: span.begin_offset, end: span.end_offset }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticPosition {
+    pub line: usize,
+    pub column: usize,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DiagnosticSeverity {
+    #[default]
+    Error,
+    Warning,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Diagnostic {
+    pub severity: DiagnosticSeverity,
+    pub code: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<DiagnosticPosition>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub span: Option<DiagnosticSpan>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub formatted: Option<String>,
+}
+
+/// Compute byte offset from 1-indexed line and 0-indexed column
+fn line_col_to_offset(source: &str, line: usize, col: usize) -> Option<usize> {
+    let mut offset = 0;
+    for (i, line_str) in source.lines().enumerate() {
+        if i + 1 == line {
+            return Some(offset + col.min(line_str.len()));
+        }
+        offset += line_str.len() + 1; // +1 for newline
+    }
+    None
+}
+
+/// Encode typeql::Error into structured diagnostics
+pub fn encode_typeql_error_diagnostics(source: &str, error: &typeql::Error) -> Vec<Diagnostic> {
+    use typeql::common::error::TypeQLError;
+
+    error
+        .errors()
+        .iter()
+        .map(|err| {
+            let code = err.format_code();
+            let message = err.message();
+
+            match err {
+                TypeQLError::SyntaxErrorDetailed { error_line_nr, error_col, formatted_error, .. } => {
+                    let position = Some(DiagnosticPosition { line: *error_line_nr, column: *error_col });
+                    let span = line_col_to_offset(source, *error_line_nr, *error_col)
+                        .map(|begin| DiagnosticSpan { begin, end: begin + 1 });
+                    Diagnostic {
+                        severity: DiagnosticSeverity::Error,
+                        code,
+                        message,
+                        position,
+                        span,
+                        formatted: Some(formatted_error.clone()),
+                    }
+                }
+                TypeQLError::ReservedKeywordAsIdentifier { identifier } => {
+                    let span = identifier.span.map(DiagnosticSpan::from);
+                    let position = span.and_then(|s| {
+                        source.line_col(Span { begin_offset: s.begin, end_offset: s.end }).map(|(begin, _)| {
+                            DiagnosticPosition { line: begin.line as usize, column: begin.column as usize }
+                        })
+                    });
+                    Diagnostic { severity: DiagnosticSeverity::Error, code, message, position, span, formatted: None }
+                }
+                _ => Diagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    code,
+                    message,
+                    position: None,
+                    span: None,
+                    formatted: None,
+                },
+            }
+        })
+        .collect()
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -35,9 +141,16 @@ pub struct TransactionAnalyzePayload {
 #[serde(rename_all = "camelCase")]
 pub struct AnalysedQueryResponse {
     pub source: String,
-    pub query: AnalyzedPipelineResponse,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub query: Option<AnalyzedPipelineResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schema: Option<AnalyzedSchemaResponse>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub preamble: Vec<AnalyzedFunctionResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub fetch: Option<FetchStructureAnnotationsResponse>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 impl IntoResponse for AnalysedQueryResponse {
@@ -68,7 +181,7 @@ pub fn encode_analyzed_query(
                 .map(|fields| FetchStructureAnnotationsResponse::Object { possible_fields: fields })
         })
         .transpose()?;
-    Ok(AnalysedQueryResponse { source, query, preamble, fetch })
+    Ok(AnalysedQueryResponse { source, query: Some(query), schema: None, preamble, fetch, diagnostics: vec![] })
 }
 
 #[cfg(debug_assertions)]

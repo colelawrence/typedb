@@ -54,7 +54,8 @@ use uuid::Uuid;
 use crate::service::{
     http::message::{
         analyze::{
-            encode_analyzed_query,
+            encode_analyzed_query, encode_typeql_error_diagnostics,
+            schema::encode_schema_query,
             structure::{encode_analyzed_pipeline_for_studio, AnalyzedPipelineResponse},
             AnalysedQueryResponse,
         },
@@ -1149,22 +1150,33 @@ impl TransactionService {
         let parsed = match parse_query(&query) {
             Ok(parsed) => parsed,
             Err(err) => {
-                let _ = respond_transaction_response(
-                    responder,
-                    TransactionServiceResponse::Err(TransactionServiceError::QueryParseFailed { typedb_source: err }),
-                );
+                // Return 200 OK with structured diagnostics instead of error
+                let diagnostics = encode_typeql_error_diagnostics(&query, &err);
+                let response = AnalysedQueryResponse {
+                    source: query,
+                    query: None,
+                    schema: None,
+                    preamble: vec![],
+                    fetch: None,
+                    diagnostics,
+                };
+                let _ = respond_transaction_response(responder, TransactionServiceResponse::QueryAnalyse(response));
                 return Continue(());
             }
         };
-        let typeql::query::QueryStructure::Pipeline(pipeline) = parsed.into_structure() else {
-            respond_error_and_return_break!(responder, TransactionServiceError::AnalyseQueryExpectsPipeline {});
-        };
-        if !self.query_queue.is_empty() || self.running_write_query.is_some() {
-            // queued queries are not handled yet so there will be no query response yet
-            self.query_queue.push_back((responder, QueueOptions::Analyze, pipeline, query));
-            Continue(())
-        } else {
-            self.run_analyse_query(responder, pipeline, query).await
+        match parsed.into_structure() {
+            typeql::query::QueryStructure::Pipeline(pipeline) => {
+                if !self.query_queue.is_empty() || self.running_write_query.is_some() {
+                    // queued queries are not handled yet so there will be no query response yet
+                    self.query_queue.push_back((responder, QueueOptions::Analyze, pipeline, query));
+                    Continue(())
+                } else {
+                    self.run_analyse_query(responder, pipeline, query).await
+                }
+            }
+            typeql::query::QueryStructure::Schema(schema_query) => {
+                self.run_analyse_schema_query(responder, schema_query, query).await
+            }
         }
     }
 
@@ -1210,6 +1222,26 @@ impl TransactionService {
         })
         .await
         .expect("Expected read query completion")
+    }
+
+    async fn run_analyse_schema_query(
+        &mut self,
+        responder: TransactionResponder,
+        schema_query: typeql::query::SchemaQuery,
+        source_query: String,
+    ) -> ControlFlow<(), ()> {
+        // Schema query analysis is synchronous - just encode the parsed structure
+        let schema = encode_schema_query(&schema_query);
+        let response = AnalysedQueryResponse {
+            source: source_query,
+            query: None,
+            schema: Some(schema),
+            preamble: vec![],
+            fetch: None,
+            diagnostics: vec![],
+        };
+        let _ = respond_transaction_response(responder, TransactionServiceResponse::QueryAnalyse(response));
+        Continue(())
     }
 }
 

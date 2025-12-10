@@ -4,6 +4,9 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+// This module is feature-gated because it depends on RocksDB-specific types
+#![cfg(feature = "rocksdb")]
+
 use std::cmp::Ordering;
 
 use bytes::{byte_array::ByteArray, Bytes};
@@ -130,10 +133,8 @@ impl LendingIterator for KeyspaceRangeIterator {
         if self.is_finished {
             return None;
         }
-        let next = self
-            .iterator
-            .next()
-            .map(|result| result.map_err(|err| KeyspaceError::Iterate { name: self.keyspace_name, source: err }));
+        let next =
+            self.iterator.next().map(|result| result.map_err(|err| KeyspaceError::iterate(self.keyspace_name, err)));
 
         // validate next against the Condition
         let item = match next {

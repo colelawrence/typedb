@@ -271,7 +271,10 @@ pub mod bdd {
     }
 
     pub fn encode_fetch_annotations_as_functor(analyzed: &AnalysedQueryResponse) -> String {
-        analyzed.fetch.encode_as_functor(&FunctorContext { pipeline: &analyzed.query })
+        match &analyzed.query {
+            Some(pipeline) => analyzed.fetch.encode_as_functor(&FunctorContext { pipeline }),
+            None => "<NONE>".to_owned(),
+        }
     }
 
     struct PipelineAnnotationsToEncode;

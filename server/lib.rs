@@ -112,6 +112,7 @@ impl Server {
             self.server_state.clone(),
             self.shutdown_receiver.clone(),
         );
+        let studio_enabled = http::studio::has_embedded_assets();
         let http_server = if let Some(http_address) = http_address_opt {
             let server = Self::serve_http(
                 self.server_info,
@@ -125,7 +126,12 @@ impl Server {
             None
         };
 
-        Self::print_serving_information(grpc_address, http_address_opt, &self.config.server.encryption);
+        Self::print_serving_information(
+            grpc_address,
+            http_address_opt,
+            &self.config.server.encryption,
+            studio_enabled,
+        );
 
         Self::spawn_shutdown_handler(self.shutdown_sender);
         if let Some(http_server) = http_server {
@@ -175,9 +181,16 @@ impl Server {
         let service = http::typedb_service::TypeDBService::new(server_info, address, server_state.clone());
         let encryption_config = http::encryption::prepare_tls_config(encryption_config)?;
         let http_service = Arc::new(service);
-        let router_service = http::typedb_service::TypeDBService::create_protected_router(http_service.clone())
+
+        let mut router = http::typedb_service::TypeDBService::create_protected_router(http_service.clone())
             .layer(authenticator)
-            .merge(http::typedb_service::TypeDBService::create_unprotected_router(http_service))
+            .merge(http::typedb_service::TypeDBService::create_unprotected_router(http_service));
+
+        if http::studio::has_embedded_assets() {
+            router = router.merge(http::studio::create_studio_router());
+        }
+
+        let router_service = router
             .layer(http::typedb_service::TypeDBService::create_cors_layer())
             .into_make_service();
 
@@ -232,6 +245,7 @@ impl Server {
         grpc_address: SocketAddr,
         http_address: Option<SocketAddr>,
         encryption_config: &EncryptionConfig,
+        studio_enabled: bool,
     ) {
         if encryption_config.enabled {
             print!("Serving gRPC on {grpc_address}");
@@ -249,6 +263,16 @@ impl Server {
             println!("WARNING: TLS NOT ENABLED. This means connections are insecure and transmit username/password credentials unencrypted over the network.");
             println!("**To allow driver connections, drivers must also be configured to *not* use TLS**")
         }
+
+        if studio_enabled {
+            if let Some(http_address) = http_address {
+                let scheme = if encryption_config.enabled { "https" } else { "http" };
+                let host = if http_address.ip().is_unspecified() { "localhost" } else { &http_address.ip().to_string() };
+                println!();
+                println!("Studio UI:  {scheme}://{host}:{}/studio/", http_address.port());
+            }
+        }
+
         println!();
         info!("\nReady!");
     }

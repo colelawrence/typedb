@@ -14,10 +14,14 @@ use std::{
 use bytes::{util::MB, Bytes};
 use itertools::Itertools;
 use resource::{constants::storage::ROCKSDB_CACHE_SIZE_MB, profile::StorageCounters};
-use rocksdb::{checkpoint::Checkpoint, IteratorMode, Options, ReadOptions, WriteBatch, WriteOptions, DB};
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "rocksdb")]
+use rocksdb::{checkpoint::Checkpoint, IteratorMode, Options, ReadOptions, WriteBatch, WriteOptions, DB};
+
+#[cfg(feature = "rocksdb")]
 use super::{constants, iterator, IteratorPool};
+#[cfg(feature = "rocksdb")]
 use crate::{key_range::KeyRange, write_batches::WriteBatches};
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -46,20 +50,28 @@ pub trait KeyspaceSet: Copy {
     fn iter() -> impl Iterator<Item = Self>;
     fn id(&self) -> KeyspaceId;
     fn name(&self) -> &'static str;
+    fn prefix_length(&self) -> Option<usize>;
+
+    #[cfg(feature = "rocksdb")]
     fn rocks_configuration(&self, _cache: &rocksdb::Cache) -> rocksdb::Options {
         let mut options = Options::default();
         options.create_if_missing(true);
         options
     }
-    fn prefix_length(&self) -> Option<usize>;
 }
 
+// ============================================================================
+// RocksDB-backed Keyspaces (feature = "rocksdb")
+// ============================================================================
+
+#[cfg(feature = "rocksdb")]
 #[derive(Debug)]
 pub struct Keyspaces {
     keyspaces: Vec<Keyspace>,
     index: [Option<KeyspaceId>; KEYSPACE_MAXIMUM_COUNT],
 }
 
+#[cfg(feature = "rocksdb")]
 impl Keyspaces {
     pub(crate) fn new() -> Self {
         Self { keyspaces: Vec::new(), index: std::array::from_fn(|_| None) }
@@ -185,6 +197,7 @@ impl fmt::Display for KeyspaceValidationError {
 impl Error for KeyspaceValidationError {}
 
 /// A non-durable key-value store that supports put, get, delete, iterate and checkpointing.
+#[cfg(feature = "rocksdb")]
 pub(crate) struct Keyspace {
     path: PathBuf,
     name: &'static str,
@@ -195,6 +208,7 @@ pub(crate) struct Keyspace {
     prefix_length: Option<usize>,
 }
 
+#[cfg(feature = "rocksdb")]
 impl Keyspace {
     pub(crate) fn open(
         storage_path: &Path,
@@ -236,9 +250,7 @@ impl Keyspace {
     }
 
     pub(crate) fn put(&self, key: &[u8], value: &[u8]) -> Result<(), KeyspaceError> {
-        self.kv_storage
-            .put_opt(key, value, &self.write_options)
-            .map_err(|error| KeyspaceError::Put { name: self.name, source: error })
+        self.kv_storage.put_opt(key, value, &self.write_options).map_err(|error| KeyspaceError::put(self.name, error))
     }
 
     pub(crate) fn get<M, V>(&self, key: &[u8], mut mapper: M) -> Result<Option<V>, KeyspaceError>
@@ -248,7 +260,7 @@ impl Keyspace {
         self.kv_storage
             .get_pinned_opt(key, &self.read_options)
             .map(|option| option.map(|value| mapper(value.as_ref())))
-            .map_err(|error| KeyspaceError::Get { name: self.name, source: error })
+            .map_err(|error| KeyspaceError::get(self.name, error))
     }
 
     pub(crate) fn get_prev<M, T>(&self, key: &[u8], mut mapper: M) -> Option<T>
@@ -272,7 +284,7 @@ impl Keyspace {
     pub(crate) fn write(&self, write_batch: WriteBatch) -> Result<(), KeyspaceError> {
         self.kv_storage
             .write_opt(write_batch, &self.write_options)
-            .map_err(|error| KeyspaceError::BatchWrite { name: self.name, source: error })
+            .map_err(|error| KeyspaceError::batch_write(self.name, error))
     }
 
     pub(crate) fn checkpoint(&self, checkpoint_dir: &Path) -> Result<(), KeyspaceCheckpointError> {
@@ -300,8 +312,8 @@ impl Keyspace {
     pub(crate) fn reset(&mut self) -> Result<(), KeyspaceError> {
         let iterator = self.kv_storage.iterator(IteratorMode::Start);
         for entry in iterator {
-            let (key, _) = entry.map_err(|err| KeyspaceError::Iterate { name: self.name, source: err })?;
-            self.kv_storage.delete(key).map_err(|err| KeyspaceError::Iterate { name: self.name, source: err })?;
+            let (key, _) = entry.map_err(|err| KeyspaceError::iterate(self.name, err))?;
+            self.kv_storage.delete(key).map_err(|err| KeyspaceError::iterate(self.name, err))?;
         }
         Ok(())
     }
@@ -310,7 +322,7 @@ impl Keyspace {
         let property_name = constants::rocksdb::PROPERTY_ESTIMATE_LIVE_DATA_SIZE;
         self.kv_storage
             .property_int_value(property_name)
-            .map_err(|source| KeyspaceError::Property { name: property_name, source })
+            .map_err(|source| KeyspaceError::property(property_name, source))
             .map(|result_opt| result_opt.unwrap_or(0))
     }
 
@@ -318,21 +330,30 @@ impl Keyspace {
         let property_name = constants::rocksdb::PROPERTY_ESTIMATE_NUM_KEYS;
         self.kv_storage
             .property_int_value(property_name)
-            .map_err(|source| KeyspaceError::Property { name: property_name, source })
+            .map_err(|source| KeyspaceError::property(property_name, source))
             .map(|result_opt| result_opt.unwrap_or(0))
     }
 }
 
+#[cfg(feature = "rocksdb")]
 impl fmt::Debug for Keyspace {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Keyspace[name={}, path={:?}, id={}]", self.name, self.path, self.id)
     }
 }
 
+#[cfg(feature = "rocksdb")]
 #[derive(Debug, Clone)]
 pub enum KeyspaceOpenError {
     RocksDB { name: &'static str, source: rocksdb::Error },
     Validation { source: KeyspaceValidationError },
+}
+
+#[cfg(not(feature = "rocksdb"))]
+#[derive(Debug, Clone)]
+pub enum KeyspaceOpenError {
+    Validation { source: KeyspaceValidationError },
+    Backend { name: &'static str, source: BackendErrorSource },
 }
 
 impl fmt::Display for KeyspaceOpenError {
@@ -341,6 +362,7 @@ impl fmt::Display for KeyspaceOpenError {
     }
 }
 
+#[cfg(feature = "rocksdb")]
 impl Error for KeyspaceOpenError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
@@ -350,10 +372,28 @@ impl Error for KeyspaceOpenError {
     }
 }
 
+#[cfg(not(feature = "rocksdb"))]
+impl Error for KeyspaceOpenError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Validation { source, .. } => Some(source),
+            Self::Backend { source, .. } => Some(source.as_ref()),
+        }
+    }
+}
+
+#[cfg(feature = "rocksdb")]
 #[derive(Debug, Clone)]
 pub enum KeyspaceCheckpointError {
     CheckpointExists { name: &'static str, dir: PathBuf },
     CreateRocksDBCheckpoint { name: &'static str, source: rocksdb::Error },
+}
+
+#[cfg(not(feature = "rocksdb"))]
+#[derive(Debug, Clone)]
+pub enum KeyspaceCheckpointError {
+    CheckpointExists { name: &'static str, dir: PathBuf },
+    Backend { name: &'static str, source: BackendErrorSource },
 }
 
 impl fmt::Display for KeyspaceCheckpointError {
@@ -362,11 +402,22 @@ impl fmt::Display for KeyspaceCheckpointError {
     }
 }
 
+#[cfg(feature = "rocksdb")]
 impl Error for KeyspaceCheckpointError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::CheckpointExists { .. } => None,
             Self::CreateRocksDBCheckpoint { source, .. } => Some(source),
+        }
+    }
+}
+
+#[cfg(not(feature = "rocksdb"))]
+impl Error for KeyspaceCheckpointError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::CheckpointExists { .. } => None,
+            Self::Backend { source, .. } => Some(source.as_ref()),
         }
     }
 }
@@ -390,14 +441,43 @@ impl Error for KeyspaceDeleteError {
     }
 }
 
+/// Type alias for boxed backend errors (allows KeyspaceError to be Clone)
+pub type BackendErrorSource = Arc<dyn Error + Send + Sync + 'static>;
+
 #[derive(Clone, Debug)]
 pub enum KeyspaceError {
-    Get { name: &'static str, source: rocksdb::Error },
-    Put { name: &'static str, source: rocksdb::Error },
-    BatchWrite { name: &'static str, source: rocksdb::Error },
-    Iterate { name: &'static str, source: rocksdb::Error },
-    DeleteRange { name: &'static str, source: rocksdb::Error },
-    Property { name: &'static str, source: rocksdb::Error },
+    Get { name: &'static str, source: BackendErrorSource },
+    Put { name: &'static str, source: BackendErrorSource },
+    BatchWrite { name: &'static str, source: BackendErrorSource },
+    Iterate { name: &'static str, source: BackendErrorSource },
+    DeleteRange { name: &'static str, source: BackendErrorSource },
+    Property { name: &'static str, source: BackendErrorSource },
+}
+
+impl KeyspaceError {
+    pub fn get(name: &'static str, source: impl Error + Send + Sync + 'static) -> Self {
+        Self::Get { name, source: Arc::new(source) }
+    }
+
+    pub fn put(name: &'static str, source: impl Error + Send + Sync + 'static) -> Self {
+        Self::Put { name, source: Arc::new(source) }
+    }
+
+    pub fn batch_write(name: &'static str, source: impl Error + Send + Sync + 'static) -> Self {
+        Self::BatchWrite { name, source: Arc::new(source) }
+    }
+
+    pub fn iterate(name: &'static str, source: impl Error + Send + Sync + 'static) -> Self {
+        Self::Iterate { name, source: Arc::new(source) }
+    }
+
+    pub fn delete_range(name: &'static str, source: impl Error + Send + Sync + 'static) -> Self {
+        Self::DeleteRange { name, source: Arc::new(source) }
+    }
+
+    pub fn property(name: &'static str, source: impl Error + Send + Sync + 'static) -> Self {
+        Self::Property { name, source: Arc::new(source) }
+    }
 }
 
 impl fmt::Display for KeyspaceError {
@@ -409,12 +489,12 @@ impl fmt::Display for KeyspaceError {
 impl Error for KeyspaceError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match &self {
-            Self::Get { source, .. } => Some(source),
-            Self::Put { source, .. } => Some(source),
-            Self::BatchWrite { source, .. } => Some(source),
-            Self::Iterate { source, .. } => Some(source),
-            Self::DeleteRange { source, .. } => Some(source),
-            Self::Property { source, .. } => Some(source),
+            Self::Get { source, .. } => Some(source.as_ref()),
+            Self::Put { source, .. } => Some(source.as_ref()),
+            Self::BatchWrite { source, .. } => Some(source.as_ref()),
+            Self::Iterate { source, .. } => Some(source.as_ref()),
+            Self::DeleteRange { source, .. } => Some(source.as_ref()),
+            Self::Property { source, .. } => Some(source.as_ref()),
         }
     }
 }
