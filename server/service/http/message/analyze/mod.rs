@@ -7,6 +7,7 @@
 use ::concept::{error::ConceptReadError, type_::type_manager::TypeManager};
 use annotations::{encode_analyzed_fetch, encode_analyzed_function, FetchStructureAnnotationsResponse};
 use axum::response::{IntoResponse, Response};
+use error::TypeDBError;
 use http::StatusCode;
 use query::analyse::AnalysedQuery;
 pub use schema::AnalyzedSchemaResponse;
@@ -122,6 +123,44 @@ pub fn encode_typeql_error_diagnostics(source: &str, error: &typeql::Error) -> V
             }
         })
         .collect()
+}
+
+/// Compute position (line/column) from a span
+fn span_to_position(source: &str, span: Span) -> Option<DiagnosticPosition> {
+    source.line_col(span).map(|(begin, _)| DiagnosticPosition {
+        line: begin.line as usize,
+        column: begin.column as usize,
+    })
+}
+
+/// Encode a TypeDBError (semantic error) into structured diagnostics.
+/// This works with any error type that implements the TypeDBError trait,
+/// including RepresentationError, AnnotationError, TypeInferenceError, QueryError, etc.
+pub fn encode_typedb_error_diagnostics(source: &str, error: &dyn TypeDBError) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+
+    // Get the most specific span available (traverses nested errors)
+    let span = error.bottom_source_span();
+    let diagnostic_span = span.map(DiagnosticSpan::from);
+    let position = span.and_then(|s| span_to_position(source, s));
+
+    diagnostics.push(Diagnostic {
+        severity: DiagnosticSeverity::Error,
+        code: format!("[{}]", error.code()),
+        message: error.format_description(),
+        position,
+        span: diagnostic_span,
+        formatted: None,
+    });
+
+    diagnostics
+}
+
+/// Encode a QueryError into diagnostics, handling the full error chain.
+/// Returns diagnostics for the root cause error with span information.
+pub fn encode_query_error_diagnostics(source: &str, error: &query::error::QueryError) -> Vec<Diagnostic> {
+    // Use the TypeDBError trait to get the deepest span
+    encode_typedb_error_diagnostics(source, error)
 }
 
 #[derive(Serialize, Deserialize, Debug)]

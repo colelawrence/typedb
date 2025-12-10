@@ -54,7 +54,7 @@ use uuid::Uuid;
 use crate::service::{
     http::message::{
         analyze::{
-            encode_analyzed_query, encode_typeql_error_diagnostics,
+            encode_analyzed_query, encode_query_error_diagnostics, encode_typeql_error_diagnostics,
             schema::encode_schema_query,
             structure::{encode_analyzed_pipeline_for_studio, AnalyzedPipelineResponse},
             AnalysedQueryResponse,
@@ -1202,11 +1202,26 @@ impl TransactionService {
                     &pipeline,
                     &source_query,
                 );
-                let analysed = unwrap_or_execute_else_respond_error_and_return_break!(
-                    analyse_result,
-                    responder,
-                    |typedb_source| { TransactionServiceError::AnalyseQueryFailed { typedb_source: *typedb_source } }
-                );
+                let analysed = match analyse_result {
+                    Ok(analysed) => analysed,
+                    Err(query_error) => {
+                        // Return 200 OK with structured diagnostics instead of error
+                        let diagnostics = encode_query_error_diagnostics(&source_query, &query_error);
+                        let response = AnalysedQueryResponse {
+                            source: source_query,
+                            query: None,
+                            schema: None,
+                            preamble: vec![],
+                            fetch: None,
+                            diagnostics,
+                        };
+                        respond_else_return_break!(
+                            responder,
+                            TransactionServiceResponse::QueryAnalyse(response)
+                        );
+                        return Continue(());
+                    }
+                };
                 let encoded_analysed = unwrap_or_execute_else_respond_error_and_return_break!(
                     encode_analyzed_query(snapshot.as_ref(), &type_manager, analysed),
                     responder,
@@ -1230,18 +1245,63 @@ impl TransactionService {
         schema_query: typeql::query::SchemaQuery,
         source_query: String,
     ) -> ControlFlow<(), ()> {
-        // Schema query analysis is synchronous - just encode the parsed structure
+        // Encode the parsed structure (syntax analysis)
         let schema = encode_schema_query(&schema_query);
+
+        // Try dry-run validation if in schema transaction
+        let diagnostics = if self.is_schema_transaction() {
+            self.dry_run_schema_query(schema_query, &source_query).await
+        } else {
+            vec![]
+        };
+
         let response = AnalysedQueryResponse {
             source: source_query,
             query: None,
             schema: Some(schema),
             preamble: vec![],
             fetch: None,
-            diagnostics: vec![],
+            diagnostics,
         };
         let _ = respond_transaction_response(responder, TransactionServiceResponse::QueryAnalyse(response));
         Continue(())
+    }
+
+    fn is_schema_transaction(&self) -> bool {
+        matches!(self.transaction.as_ref(), Some(Transaction::Schema(_)))
+    }
+
+    async fn dry_run_schema_query(
+        &mut self,
+        schema_query: typeql::query::SchemaQuery,
+        source_query: &str,
+    ) -> Vec<crate::service::http::message::analyze::Diagnostic> {
+        use crate::service::http::message::analyze::encode_query_error_diagnostics;
+
+        // Take the schema transaction for execution
+        let Some(Transaction::Schema(schema_transaction)) = self.transaction.take() else {
+            return vec![];
+        };
+
+        // Execute the schema query and rollback
+        let (mut transaction, result) = spawn_blocking({
+            let source = source_query.to_owned();
+            move || execute_schema_query(schema_transaction, schema_query, source)
+        })
+        .await
+        .expect("Expected schema query dry-run to complete");
+
+        // Always rollback to discard any changes
+        transaction.rollback();
+
+        // Put the transaction back
+        self.transaction = Some(Transaction::Schema(transaction));
+
+        // Convert result to diagnostics
+        match result {
+            Ok(()) => vec![], // Validation passed - no diagnostics
+            Err(query_error) => encode_query_error_diagnostics(source_query, &query_error),
+        }
     }
 }
 

@@ -1073,7 +1073,8 @@ async fn typeql_analyze_may_error(context: &mut Context, may_error: params::Type
 async fn analyzed_query_pipeline_is(context: &mut Context, step: &Step) {
     let expected_functor = step.docstring().unwrap();
     let analyzed = context.analyzed.as_ref().unwrap();
-    let actual_functor = encode_pipeline_structure_as_functor(&analyzed.query);
+    let pipeline = analyzed.query.as_ref().expect("Expected pipeline query analysis");
+    let actual_functor = encode_pipeline_structure_as_functor(pipeline);
 
     assert_eq!(normalize_functor_for_compare(&actual_functor), normalize_functor_for_compare(&expected_functor));
 }
@@ -1101,7 +1102,8 @@ async fn analyzed_query_preamble_contains(context: &mut Context, step: &Step) {
 async fn analyzed_query_annotations_is(context: &mut Context, step: &Step) {
     let expected_functor = step.docstring().unwrap();
     let analyzed = context.analyzed.as_ref().unwrap();
-    let actual_functor = encode_pipeline_annotations_as_functor(&analyzed.query);
+    let pipeline = analyzed.query.as_ref().expect("Expected pipeline query analysis");
+    let actual_functor = encode_pipeline_annotations_as_functor(pipeline);
 
     assert_eq!(normalize_functor_for_compare(&actual_functor), normalize_functor_for_compare(expected_functor));
 }
@@ -1146,4 +1148,92 @@ fn normalize_functor_for_compare(functor: &str) -> String {
     let mut normalized = functor.to_lowercase();
     normalized.retain(|c| !c.is_whitespace());
     normalized
+}
+
+// Diagnostic step definitions for Phase 1-4 analyze endpoint features
+
+#[cucumber::then(expr = "analyzed query has {int} diagnostic(s)")]
+async fn analyzed_query_has_diagnostics_count(context: &mut Context, count: usize) {
+    let analyzed = context.analyzed.as_ref().expect("No analyzed query");
+    assert_eq!(
+        analyzed.diagnostics.len(),
+        count,
+        "Expected {} diagnostics, got {}: {:?}",
+        count,
+        analyzed.diagnostics.len(),
+        analyzed.diagnostics
+    );
+}
+
+#[cucumber::then("analyzed query has no diagnostics")]
+async fn analyzed_query_has_no_diagnostics(context: &mut Context) {
+    let analyzed = context.analyzed.as_ref().expect("No analyzed query");
+    assert!(
+        analyzed.diagnostics.is_empty(),
+        "Expected no diagnostics, got {}: {:?}",
+        analyzed.diagnostics.len(),
+        analyzed.diagnostics
+    );
+}
+
+#[cucumber::then(expr = r"analyzed query diagnostic {int} has severity: {word}")]
+async fn analyzed_query_diagnostic_has_severity(context: &mut Context, index: usize, severity: String) {
+    let analyzed = context.analyzed.as_ref().expect("No analyzed query");
+    let diagnostic = &analyzed.diagnostics[index];
+    let actual_severity = format!("{:?}", diagnostic.severity).to_lowercase();
+    assert_eq!(
+        actual_severity, severity.to_lowercase(),
+        "Expected severity '{}', got '{}'",
+        severity, actual_severity
+    );
+}
+
+#[cucumber::then(expr = r"analyzed query diagnostic {int} has code: {word}")]
+async fn analyzed_query_diagnostic_has_code(context: &mut Context, index: usize, code: String) {
+    let analyzed = context.analyzed.as_ref().expect("No analyzed query");
+    let diagnostic = &analyzed.diagnostics[index];
+    assert_eq!(
+        diagnostic.code, code,
+        "Expected code '{}', got '{}'",
+        code, diagnostic.code
+    );
+}
+
+#[cucumber::then(expr = r"analyzed query diagnostic {int} has message containing: {string}")]
+async fn analyzed_query_diagnostic_has_message_containing(context: &mut Context, index: usize, substring: String) {
+    let analyzed = context.analyzed.as_ref().expect("No analyzed query");
+    let diagnostic = &analyzed.diagnostics[index];
+    assert!(
+        diagnostic.message.contains(&substring),
+        "Expected message to contain '{}', got '{}'",
+        substring, diagnostic.message
+    );
+}
+
+#[cucumber::then(expr = r"analyzed query diagnostic {int} has span begin: {int}")]
+async fn analyzed_query_diagnostic_has_span_begin(context: &mut Context, index: usize, begin: usize) {
+    let analyzed = context.analyzed.as_ref().expect("No analyzed query");
+    let diagnostic = &analyzed.diagnostics[index];
+    let span = diagnostic.span.as_ref().expect("Diagnostic has no span");
+    assert_eq!(span.begin, begin, "Expected span begin {}, got {}", begin, span.begin);
+}
+
+#[cucumber::then(expr = r"analyzed query diagnostic {int} has span end: {int}")]
+async fn analyzed_query_diagnostic_has_span_end(context: &mut Context, index: usize, end: usize) {
+    let analyzed = context.analyzed.as_ref().expect("No analyzed query");
+    let diagnostic = &analyzed.diagnostics[index];
+    let span = diagnostic.span.as_ref().expect("Diagnostic has no span");
+    assert_eq!(span.end, end, "Expected span end {}, got {}", end, span.end);
+}
+
+#[cucumber::then("analyzed query has schema")]
+async fn analyzed_query_has_schema(context: &mut Context) {
+    let analyzed = context.analyzed.as_ref().expect("No analyzed query");
+    assert!(analyzed.schema.is_some(), "Expected schema analysis, got None");
+}
+
+#[cucumber::then("analyzed query has no schema")]
+async fn analyzed_query_has_no_schema(context: &mut Context) {
+    let analyzed = context.analyzed.as_ref().expect("No analyzed query");
+    assert!(analyzed.schema.is_none(), "Expected no schema, got {:?}", analyzed.schema);
 }
