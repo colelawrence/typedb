@@ -201,16 +201,51 @@ impl TypeDBPlayground {
     /// Execute any TypeQL query, automatically detecting the type.
     #[wasm_bindgen]
     pub fn execute(&self, query: &str) -> JsValue {
-        let trimmed = query.trim();
+        let detection = detect_query_type_internal(query);
 
-        // Detect query type
-        if trimmed.starts_with("define") || trimmed.starts_with("undefine") || trimmed.starts_with("redefine") {
-            self.define_schema(query)
-        } else if trimmed.starts_with("insert") || trimmed.contains("\ndelete") || trimmed.contains(" delete") {
-            self.write(query)
-        } else {
-            self.query(query)
+        match detection.query_type {
+            DetectedQueryType::Schema => self.define_schema(query),
+            DetectedQueryType::Write => self.write(query),
+            DetectedQueryType::Read => self.query(query),
+            DetectedQueryType::Unknown => {
+                // Default to read for unknown queries - let the parser give a better error
+                self.query(query)
+            }
         }
+    }
+
+    /// Execute a query with an explicit transaction type.
+    /// Mode: "schema", "write", or "read"
+    #[wasm_bindgen]
+    pub fn execute_with_mode(&self, query: &str, mode: &str) -> JsValue {
+        match mode {
+            "schema" => self.define_schema(query),
+            "write" => self.write(query),
+            "read" => self.query(query),
+            _ => {
+                // Invalid mode - return error
+                let result = OperationResult {
+                    success: false,
+                    message: format!("Invalid transaction mode: '{}'. Use 'schema', 'write', or 'read'.", mode),
+                    row_count: None,
+                    error: Some(QueryError {
+                        kind: ErrorKind::TypeError,
+                        message: format!("Unknown transaction mode: {}", mode),
+                        location: None,
+                        hint: Some("Valid modes are: 'schema' (for define/undefine/redefine), 'write' (for insert/delete), 'read' (for match/fetch)".to_string()),
+                    }),
+                };
+                serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+            }
+        }
+    }
+
+    /// Detect the query type without executing.
+    /// Returns: { query_type: "schema"|"write"|"read"|"unknown", confident: bool, keyword?: string }
+    #[wasm_bindgen]
+    pub fn detect_query_type(&self, query: &str) -> JsValue {
+        let detection = detect_query_type_internal(query);
+        serde_wasm_bindgen::to_value(&detection).unwrap_or(JsValue::NULL)
     }
 
     /// Get database info.
@@ -725,6 +760,180 @@ fn clean_error_message(message: &str) -> String {
         format!("{}...", &cleaned[..500])
     } else {
         cleaned
+    }
+}
+
+// ============================================================================
+// Query Type Detection
+// ============================================================================
+
+/// Detected query type for transaction routing
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DetectedQueryType {
+    /// Schema modification (define, undefine, redefine)
+    Schema,
+    /// Data write (insert, delete)
+    Write,
+    /// Data read (match, fetch)
+    Read,
+    /// Unknown/ambiguous
+    Unknown,
+}
+
+/// Result of query type detection
+#[derive(Debug, Clone, Serialize)]
+pub struct QueryTypeDetection {
+    /// The detected query type
+    pub query_type: DetectedQueryType,
+    /// Confidence level (true = high confidence based on keyword, false = fallback/guess)
+    pub confident: bool,
+    /// The keyword that triggered detection (if any)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keyword: Option<String>,
+}
+
+/// Strip comments from a query and return just the code content.
+/// Handles both line comments (#) and block comments (/* ... */)
+fn strip_comments(query: &str) -> String {
+    let mut result = String::with_capacity(query.len());
+    let mut chars = query.chars().peekable();
+    let mut in_string = false;
+    let mut string_char = '"';
+
+    while let Some(c) = chars.next() {
+        // Handle string literals - don't strip "comments" inside strings
+        if !in_string && (c == '"' || c == '\'') {
+            in_string = true;
+            string_char = c;
+            result.push(c);
+            continue;
+        }
+        if in_string {
+            result.push(c);
+            if c == string_char {
+                in_string = false;
+            }
+            continue;
+        }
+
+        // Handle line comments (#)
+        if c == '#' {
+            // Skip to end of line
+            while let Some(&next) = chars.peek() {
+                chars.next();
+                if next == '\n' {
+                    result.push('\n'); // Preserve newlines for formatting
+                    break;
+                }
+            }
+            continue;
+        }
+
+        // Handle block comments (/* ... */)
+        if c == '/' {
+            if chars.peek() == Some(&'*') {
+                chars.next(); // consume '*'
+                // Skip until */
+                while let Some(c2) = chars.next() {
+                    if c2 == '*' && chars.peek() == Some(&'/') {
+                        chars.next(); // consume '/'
+                        break;
+                    }
+                }
+                continue;
+            }
+        }
+
+        result.push(c);
+    }
+
+    result
+}
+
+/// Detect the query type by analyzing the query text.
+/// This strips comments first, then looks for keywords.
+fn detect_query_type_internal(query: &str) -> QueryTypeDetection {
+    let stripped = strip_comments(query);
+    let trimmed = stripped.trim();
+
+    // Check for schema keywords
+    for keyword in &["define", "undefine", "redefine"] {
+        if trimmed.starts_with(keyword) {
+            // Ensure it's actually the keyword and not part of another word
+            let rest = &trimmed[keyword.len()..];
+            if rest.is_empty() || rest.starts_with(char::is_whitespace) || rest.starts_with(';') {
+                return QueryTypeDetection {
+                    query_type: DetectedQueryType::Schema,
+                    confident: true,
+                    keyword: Some(keyword.to_string()),
+                };
+            }
+        }
+    }
+
+    // Check for write keywords (insert at start, or delete anywhere after match)
+    if trimmed.starts_with("insert") {
+        let rest = &trimmed[6..];
+        if rest.is_empty() || rest.starts_with(char::is_whitespace) {
+            return QueryTypeDetection {
+                query_type: DetectedQueryType::Write,
+                confident: true,
+                keyword: Some("insert".to_string()),
+            };
+        }
+    }
+
+    // Check for match-based queries
+    if trimmed.starts_with("match") {
+        let rest = &trimmed[5..];
+        if rest.is_empty() || rest.starts_with(char::is_whitespace) {
+            // Check if there's a delete or insert later (making it a write query)
+            // Look for delete or insert as standalone keywords
+            let words: Vec<&str> = trimmed.split_whitespace().collect();
+            for word in &words {
+                if *word == "delete" || word.starts_with("delete;") {
+                    return QueryTypeDetection {
+                        query_type: DetectedQueryType::Write,
+                        confident: true,
+                        keyword: Some("match...delete".to_string()),
+                    };
+                }
+                if *word == "insert" || word.starts_with("insert;") {
+                    return QueryTypeDetection {
+                        query_type: DetectedQueryType::Write,
+                        confident: true,
+                        keyword: Some("match...insert".to_string()),
+                    };
+                }
+            }
+
+            // Pure match query = read
+            return QueryTypeDetection {
+                query_type: DetectedQueryType::Read,
+                confident: true,
+                keyword: Some("match".to_string()),
+            };
+        }
+    }
+
+    // Check for fetch (always read)
+    if trimmed.starts_with("fetch") {
+        let rest = &trimmed[5..];
+        if rest.is_empty() || rest.starts_with(char::is_whitespace) {
+            return QueryTypeDetection {
+                query_type: DetectedQueryType::Read,
+                confident: true,
+                keyword: Some("fetch".to_string()),
+            };
+        }
+    }
+
+    // If we can't determine, return unknown
+    QueryTypeDetection {
+        query_type: DetectedQueryType::Unknown,
+        confident: false,
+        keyword: None,
     }
 }
 

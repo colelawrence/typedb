@@ -303,16 +303,148 @@
             background: var(--accent);
         }
 
-        .keyboard-hint {
-            font-size: 0.75rem;
+        /* Query toolbar - sits between header and textarea */
+        .query-toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.5rem 1rem;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+            gap: 0.75rem;
+            flex-wrap: wrap;
+        }
+
+        .query-toolbar-left {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .query-toolbar-right {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        /* Combined mode selector with integrated indicator */
+        .mode-control {
+            display: flex;
+            align-items: center;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            overflow: hidden;
+        }
+
+        .mode-control select {
+            background: transparent;
+            color: var(--text-primary);
+            border: none;
+            padding: 0.5rem 0.625rem;
+            padding-right: 0.25rem;
+            font-size: 0.8125rem;
+            font-family: inherit;
+            cursor: pointer;
+            outline: none;
+        }
+
+        .mode-control select:focus {
+            background: rgba(255,255,255,0.05);
+        }
+
+        /* Query type indicator - now inside mode-control */
+        .query-type-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+            font-size: 0.6875rem;
+            padding: 0.25rem 0.5rem;
+            margin: 0.25rem;
+            margin-left: 0;
+            border-radius: 4px;
+            background: rgba(0,0,0,0.2);
+            font-weight: 600;
+            letter-spacing: 0.03em;
+            text-transform: uppercase;
+            white-space: nowrap;
+        }
+
+        .query-type-indicator.type-schema {
+            background: rgba(251, 191, 36, 0.15);
+            color: #fbbf24;
+        }
+
+        .query-type-indicator.type-write {
+            background: rgba(244, 114, 182, 0.15);
+            color: #f472b6;
+        }
+
+        .query-type-indicator.type-read {
+            background: rgba(96, 165, 250, 0.15);
+            color: #60a5fa;
+        }
+
+        .query-type-indicator.type-unknown {
             color: var(--text-secondary);
         }
 
-        .keyboard-hint kbd {
-            background: var(--bg-tertiary);
-            padding: 0.125rem 0.375rem;
+        .query-type-indicator .indicator-dot {
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+
+        /* Run button - primary action */
+        .btn-run {
+            background: var(--accent);
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            font-size: 0.8125rem;
+            font-family: inherit;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.15s, transform 0.1s;
+            display: flex;
+            align-items: center;
+            gap: 0.375rem;
+        }
+
+        .btn-run:hover {
+            background: #d63d56;
+        }
+
+        .btn-run:active {
+            transform: scale(0.98);
+        }
+
+        .btn-run kbd {
+            font-size: 0.625rem;
+            opacity: 0.7;
+            background: rgba(0,0,0,0.2);
+            padding: 0.125rem 0.25rem;
             border-radius: 3px;
+        }
+
+        /* Secondary button */
+        .btn-secondary {
+            background: transparent;
+            color: var(--text-secondary);
             border: 1px solid var(--border);
+            padding: 0.5rem 0.75rem;
+            border-radius: 6px;
+            font-size: 0.8125rem;
+            font-family: inherit;
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+        }
+
+        .btn-secondary:hover {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
         }
 
         @media (max-width: 768px) {
@@ -329,6 +461,32 @@
             #results-panel {
                 grid-column: 1;
                 grid-row: 2;
+            }
+
+            .query-toolbar {
+                padding: 0.5rem 0.75rem;
+            }
+
+            .btn-run kbd {
+                display: none;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .query-toolbar {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 0.5rem;
+            }
+
+            .query-toolbar-left,
+            .query-toolbar-right {
+                justify-content: space-between;
+            }
+
+            .btn-run {
+                flex: 1;
+                justify-content: center;
             }
         }
     </style>
@@ -347,10 +505,25 @@
         <div class="panel" id="query-panel">
             <div class="panel-header">
                 <span>TypeQL Query</span>
-                <div style="display: flex; gap: 0.5rem; align-items: center;">
-                    <span class="keyboard-hint"><kbd>Ctrl</kbd>+<kbd>Enter</kbd> to run</span>
-                    <button id="run-btn">Run</button>
-                    <button id="clear-btn">Clear</button>
+            </div>
+            <div class="query-toolbar">
+                <div class="query-toolbar-left">
+                    <div class="mode-control">
+                        <select id="tx-mode">
+                            <option value="auto">Auto</option>
+                            <option value="read">Read</option>
+                            <option value="write">Write</option>
+                            <option value="schema">Schema</option>
+                        </select>
+                        <div class="query-type-indicator type-unknown" id="query-type-indicator">
+                            <span class="indicator-dot"></span>
+                            <span class="indicator-label">-</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="query-toolbar-right">
+                    <button class="btn-secondary" id="clear-btn">Clear</button>
+                    <button class="btn-run" id="run-btn">Run <kbd>Ctrl+Enter</kbd></button>
                 </div>
             </div>
             <div class="panel-content">
@@ -672,6 +845,61 @@ $age > 25;`
             }
         }
 
+        // Update query type indicator based on current query text
+        function updateQueryTypeIndicator() {
+            if (!db) return;
+
+            const queryInput = document.getElementById('query-input');
+            const query = queryInput.value;
+            const indicator = document.getElementById('query-type-indicator');
+            const modeSelect = document.getElementById('tx-mode');
+            const selectedMode = modeSelect.value;
+
+            // Remove all type classes
+            indicator.classList.remove('type-schema', 'type-write', 'type-read', 'type-unknown');
+
+            if (selectedMode !== 'auto') {
+                // Show the forced mode
+                indicator.classList.add(`type-${selectedMode}`);
+                indicator.querySelector('.indicator-label').textContent = selectedMode.toUpperCase();
+                return;
+            }
+
+            // Auto mode - detect from query
+            if (!query.trim()) {
+                indicator.classList.add('type-unknown');
+                indicator.querySelector('.indicator-label').textContent = '-';
+                return;
+            }
+
+            try {
+                const detection = db.detect_query_type(query);
+                const typeClass = `type-${detection.query_type}`;
+                indicator.classList.add(typeClass);
+
+                let label = detection.query_type.toUpperCase();
+                if (detection.keyword && detection.confident) {
+                    label = detection.keyword;
+                }
+                indicator.querySelector('.indicator-label').textContent = label;
+            } catch (e) {
+                indicator.classList.add('type-unknown');
+                indicator.querySelector('.indicator-label').textContent = '?';
+            }
+        }
+
+        // Debounce helper for input events
+        function debounce(fn, delay) {
+            let timeoutId;
+            return function (...args) {
+                clearTimeout(timeoutId);
+                timeoutId = setTimeout(() => fn.apply(this, args), delay);
+            };
+        }
+
+        // Debounced version of updateQueryTypeIndicator
+        const debouncedUpdateIndicator = debounce(updateQueryTypeIndicator, 150);
+
         // Run query
         function runQuery() {
             if (!db) {
@@ -681,6 +909,8 @@ $age > 25;`
 
             const queryInput = document.getElementById('query-input');
             const query = queryInput.value.trim();
+            const modeSelect = document.getElementById('tx-mode');
+            const selectedMode = modeSelect.value;
 
             if (!query) {
                 log('No query to execute', 'info');
@@ -690,7 +920,14 @@ $age > 25;`
             log(`\n> ${query.split('\n')[0]}${query.includes('\n') ? '...' : ''}`, 'info');
 
             try {
-                const result = db.execute(query);
+                let result;
+                if (selectedMode === 'auto') {
+                    // Let the WASM auto-detect
+                    result = db.execute(query);
+                } else {
+                    // Use explicit mode
+                    result = db.execute_with_mode(query, selectedMode);
+                }
                 logResult(result);
             } catch (e) {
                 log(`Error: ${e.message}`, 'error');
@@ -701,6 +938,7 @@ $age > 25;`
         document.getElementById('run-btn').addEventListener('click', runQuery);
         document.getElementById('clear-btn').addEventListener('click', () => {
             document.getElementById('query-input').value = '';
+            updateQueryTypeIndicator();
         });
         document.getElementById('clear-results-btn').addEventListener('click', clearOutput);
 
@@ -712,12 +950,19 @@ $age > 25;`
             }
         });
 
+        // Update indicator on text input (debounced)
+        document.getElementById('query-input').addEventListener('input', debouncedUpdateIndicator);
+
+        // Update indicator immediately when mode changes
+        document.getElementById('tx-mode').addEventListener('change', updateQueryTypeIndicator);
+
         // Example buttons
         document.querySelectorAll('[data-example]').forEach(btn => {
             btn.addEventListener('click', () => {
                 const example = examples[btn.dataset.example];
                 if (example) {
                     document.getElementById('query-input').value = example;
+                    updateQueryTypeIndicator();
                 }
             });
         });
