@@ -9,6 +9,7 @@ use std::{
     sync::Arc,
 };
 
+#[cfg(feature = "rocksdb")]
 use answer::Type;
 use compiler::executable::pipeline::ExecutablePipeline;
 use concept::thing::statistics::Statistics;
@@ -16,18 +17,26 @@ use ir::{
     pipeline::{fetch::FetchObject, function::Function},
     translation::pipeline::TranslatedStage,
 };
+#[cfg(feature = "rocksdb")]
 use moka::sync::{Cache, CacheBuilder};
+#[cfg(feature = "rocksdb")]
 use resource::{
     constants::database::{QUERY_PLAN_CACHE_FLUSH_ANY_STATISTIC_CHANGE_FRACTION, QUERY_PLAN_CACHE_SIZE},
     perf_counters::QUERY_CACHE_FLUSH,
 };
 use structural_equality::StructuralEquality;
 
+// ============================================================================
+// QueryCache with moka (for RocksDB/server builds)
+// ============================================================================
+
+#[cfg(feature = "rocksdb")]
 #[derive(Debug)]
 pub struct QueryCache {
     cache: Cache<IRQuery, ExecutablePipeline>,
 }
 
+#[cfg(feature = "rocksdb")]
 impl QueryCache {
     pub fn new() -> Self {
         let cache = CacheBuilder::new(QUERY_PLAN_CACHE_SIZE).support_invalidation_closures().build();
@@ -87,12 +96,67 @@ impl QueryCache {
     }
 }
 
+#[cfg(feature = "rocksdb")]
 impl Default for QueryCache {
     fn default() -> Self {
         Self::new()
     }
 }
 
+// ============================================================================
+// QueryCache stub for in-memory/WASM builds (no moka dependency)
+// ============================================================================
+
+/// Simple no-op cache for WASM builds. Does not cache queries.
+#[cfg(not(feature = "rocksdb"))]
+#[derive(Debug)]
+pub struct QueryCache {
+    _private: (),
+}
+
+#[cfg(not(feature = "rocksdb"))]
+impl QueryCache {
+    pub fn new() -> Self {
+        QueryCache { _private: () }
+    }
+
+    pub(crate) fn get(
+        &self,
+        _preamble: Arc<Vec<Function>>,
+        _stages: Arc<Vec<TranslatedStage>>,
+        _fetch: Arc<Option<FetchObject>>,
+    ) -> Option<ExecutablePipeline> {
+        // No caching in memory mode
+        None
+    }
+
+    pub(crate) fn insert(
+        &self,
+        _preamble: Arc<Vec<Function>>,
+        _stages: Arc<Vec<TranslatedStage>>,
+        _fetch: Arc<Option<FetchObject>>,
+        _pipeline: ExecutablePipeline,
+    ) {
+        // No caching in memory mode
+    }
+
+    pub fn may_evict(&self, _new_statistics: &Statistics) {
+        // No-op
+    }
+
+    pub fn force_reset(&self, _statistics: &Statistics) {
+        // No-op
+    }
+}
+
+#[cfg(not(feature = "rocksdb"))]
+impl Default for QueryCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(feature = "rocksdb")]
 #[derive(Debug)]
 struct IRQuery {
     preamable: Arc<Vec<Function>>,
@@ -100,26 +164,31 @@ struct IRQuery {
     fetch: Arc<Option<FetchObject>>,
 }
 
+#[cfg(feature = "rocksdb")]
 impl IRQuery {
     fn new(preamable: Arc<Vec<Function>>, stages: Arc<Vec<TranslatedStage>>, fetch: Arc<Option<FetchObject>>) -> Self {
         Self { preamable, stages, fetch }
     }
 }
 
+#[cfg(feature = "rocksdb")]
 impl Hash for IRQuery {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.hash_into(state);
     }
 }
 
+#[cfg(feature = "rocksdb")]
 impl PartialEq<Self> for IRQuery {
     fn eq(&self, other: &Self) -> bool {
         self.equals(other)
     }
 }
 
+#[cfg(feature = "rocksdb")]
 impl Eq for IRQuery {}
 
+#[cfg(feature = "rocksdb")]
 impl StructuralEquality for IRQuery {
     fn hash(&self) -> u64 {
         let mut hasher = DefaultHasher::new();

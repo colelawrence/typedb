@@ -1,0 +1,974 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TypeDB Browser Playground</title>
+    <style>
+        :root {
+            --bg-primary: #1a1a2e;
+            --bg-secondary: #16213e;
+            --bg-tertiary: #0f3460;
+            --text-primary: #eee;
+            --text-secondary: #aaa;
+            --accent: #e94560;
+            --success: #4ade80;
+            --error: #f87171;
+            --border: #334155;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        header {
+            background: var(--bg-secondary);
+            padding: 1rem 2rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        header h1 {
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+
+        header .badge {
+            background: var(--accent);
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        header .status {
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+        }
+
+        header .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--text-secondary);
+        }
+
+        header .status-dot.ready {
+            background: var(--success);
+        }
+
+        main {
+            flex: 1;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: 1fr 1fr;
+            gap: 1px;
+            background: var(--border);
+        }
+
+        .panel {
+            background: var(--bg-primary);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .panel-header {
+            background: var(--bg-secondary);
+            padding: 0.75rem 1rem;
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .panel-header button {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+            padding: 0.375rem 0.75rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-family: inherit;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+
+        .panel-header button:hover {
+            background: var(--accent);
+        }
+
+        .panel-content {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+        }
+
+        textarea {
+            width: 100%;
+            height: 100%;
+            background: transparent;
+            color: var(--text-primary);
+            border: none;
+            padding: 1rem;
+            font-family: inherit;
+            font-size: 0.875rem;
+            line-height: 1.5;
+            resize: none;
+            outline: none;
+        }
+
+        textarea::placeholder {
+            color: var(--text-secondary);
+        }
+
+        .output {
+            width: 100%;
+            height: 100%;
+            padding: 1rem;
+            overflow: auto;
+            font-size: 0.875rem;
+            line-height: 1.5;
+        }
+
+        .output pre {
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .output .success {
+            color: var(--success);
+        }
+
+        .output .error {
+            color: var(--error);
+        }
+
+        .output .info {
+            color: var(--text-secondary);
+        }
+
+        .output .row {
+            padding: 0.25rem 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .output table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 0.5rem 0;
+        }
+
+        .output th, .output td {
+            text-align: left;
+            padding: 0.5rem;
+            border: 1px solid var(--border);
+        }
+
+        .output th {
+            background: var(--bg-secondary);
+            color: var(--text-secondary);
+        }
+
+        /* Rich value styling */
+        .value-entity {
+            color: #60a5fa;
+            font-weight: 500;
+        }
+        .value-relation {
+            color: #c084fc;
+            font-weight: 500;
+        }
+        .value-attribute {
+            color: #34d399;
+        }
+        .value-type {
+            color: #fbbf24;
+            font-style: italic;
+        }
+        .value-string {
+            color: #fb923c;
+        }
+        .value-number {
+            color: #22d3ee;
+        }
+        .value-boolean {
+            color: #f472b6;
+        }
+        .value-none {
+            color: var(--text-secondary);
+            font-style: italic;
+        }
+        .value-iid {
+            color: var(--text-secondary);
+            font-size: 0.75rem;
+            margin-left: 0.25rem;
+        }
+        .var-name {
+            color: var(--text-secondary);
+            font-size: 0.75rem;
+        }
+
+        /* Error styling */
+        .error-box {
+            background: rgba(248, 113, 113, 0.1);
+            border: 1px solid var(--error);
+            border-radius: 6px;
+            padding: 1rem;
+            margin: 0.5rem 0;
+        }
+        .error-kind {
+            color: var(--error);
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+        .error-message {
+            color: var(--text-primary);
+            margin-bottom: 0.5rem;
+        }
+        .error-hint {
+            color: var(--success);
+            font-size: 0.875rem;
+            margin-top: 0.5rem;
+        }
+        .error-hint::before {
+            content: "Hint: ";
+            font-weight: 600;
+        }
+        .error-location {
+            color: var(--text-secondary);
+            font-size: 0.75rem;
+        }
+
+        #query-panel {
+            grid-column: 1;
+            grid-row: 1 / 3;
+        }
+
+        #results-panel {
+            grid-column: 2;
+            grid-row: 1 / 3;
+        }
+
+        .examples {
+            background: var(--bg-secondary);
+            padding: 1rem;
+            border-top: 1px solid var(--border);
+        }
+
+        .examples h3 {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.5rem;
+        }
+
+        .examples-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+
+        .examples-list button {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+            padding: 0.375rem 0.75rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-family: inherit;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+
+        .examples-list button:hover {
+            background: var(--accent);
+        }
+
+        /* Query toolbar - sits between header and textarea */
+        .query-toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.5rem 1rem;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+            gap: 0.75rem;
+            flex-wrap: wrap;
+        }
+
+        .query-toolbar-left {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .query-toolbar-right {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        /* Combined mode selector with integrated indicator */
+        .mode-control {
+            display: flex;
+            align-items: center;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            overflow: hidden;
+        }
+
+        .mode-control select {
+            background: transparent;
+            color: var(--text-primary);
+            border: none;
+            padding: 0.5rem 0.625rem;
+            padding-right: 0.25rem;
+            font-size: 0.8125rem;
+            font-family: inherit;
+            cursor: pointer;
+            outline: none;
+        }
+
+        .mode-control select:focus {
+            background: rgba(255,255,255,0.05);
+        }
+
+        /* Query type indicator - now inside mode-control */
+        .query-type-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+            font-size: 0.6875rem;
+            padding: 0.25rem 0.5rem;
+            margin: 0.25rem;
+            margin-left: 0;
+            border-radius: 4px;
+            background: rgba(0,0,0,0.2);
+            font-weight: 600;
+            letter-spacing: 0.03em;
+            text-transform: uppercase;
+            white-space: nowrap;
+        }
+
+        .query-type-indicator.type-schema {
+            background: rgba(251, 191, 36, 0.15);
+            color: #fbbf24;
+        }
+
+        .query-type-indicator.type-write {
+            background: rgba(244, 114, 182, 0.15);
+            color: #f472b6;
+        }
+
+        .query-type-indicator.type-read {
+            background: rgba(96, 165, 250, 0.15);
+            color: #60a5fa;
+        }
+
+        .query-type-indicator.type-unknown {
+            color: var(--text-secondary);
+        }
+
+        .query-type-indicator .indicator-dot {
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+
+        /* Run button - primary action */
+        .btn-run {
+            background: var(--accent);
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            font-size: 0.8125rem;
+            font-family: inherit;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.15s, transform 0.1s;
+            display: flex;
+            align-items: center;
+            gap: 0.375rem;
+        }
+
+        .btn-run:hover {
+            background: #d63d56;
+        }
+
+        .btn-run:active {
+            transform: scale(0.98);
+        }
+
+        .btn-run kbd {
+            font-size: 0.625rem;
+            opacity: 0.7;
+            background: rgba(0,0,0,0.2);
+            padding: 0.125rem 0.25rem;
+            border-radius: 3px;
+        }
+
+        /* Secondary button */
+        .btn-secondary {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
+            padding: 0.5rem 0.75rem;
+            border-radius: 6px;
+            font-size: 0.8125rem;
+            font-family: inherit;
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+        }
+
+        .btn-secondary:hover {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+
+        @media (max-width: 768px) {
+            main {
+                grid-template-columns: 1fr;
+                grid-template-rows: 1fr 1fr;
+            }
+
+            #query-panel {
+                grid-column: 1;
+                grid-row: 1;
+            }
+
+            #results-panel {
+                grid-column: 1;
+                grid-row: 2;
+            }
+
+            .query-toolbar {
+                padding: 0.5rem 0.75rem;
+            }
+
+            .btn-run kbd {
+                display: none;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .query-toolbar {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 0.5rem;
+            }
+
+            .query-toolbar-left,
+            .query-toolbar-right {
+                justify-content: space-between;
+            }
+
+            .btn-run {
+                flex: 1;
+                justify-content: center;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>TypeDB Playground</h1>
+        <span class="badge">WASM</span>
+        <div class="status">
+            <span class="status-dot" id="status-dot"></span>
+            <span id="status-text">Loading...</span>
+        </div>
+    </header>
+
+    <main>
+        <div class="panel" id="query-panel">
+            <div class="panel-header">
+                <span>TypeQL Query</span>
+            </div>
+            <div class="query-toolbar">
+                <div class="query-toolbar-left">
+                    <div class="mode-control">
+                        <select id="tx-mode">
+                            <option value="auto">Auto</option>
+                            <option value="read">Read</option>
+                            <option value="write">Write</option>
+                            <option value="schema">Schema</option>
+                        </select>
+                        <div class="query-type-indicator type-unknown" id="query-type-indicator">
+                            <span class="indicator-dot"></span>
+                            <span class="indicator-label">-</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="query-toolbar-right">
+                    <button class="btn-secondary" id="clear-btn">Clear</button>
+                    <button class="btn-run" id="run-btn">Run <kbd>Ctrl+Enter</kbd></button>
+                </div>
+            </div>
+            <div class="panel-content">
+                <textarea id="query-input" placeholder="Enter your TypeQL query here...
+
+Examples:
+  define entity person;
+  insert $p isa person;
+  match $p isa person;"></textarea>
+            </div>
+            <div class="examples">
+                <h3>Quick Examples</h3>
+                <div class="examples-list">
+                    <button data-example="schema">1. Define Schema</button>
+                    <button data-example="insert">2. Insert Data</button>
+                    <button data-example="query">3. Query Data</button>
+                    <button data-example="relations">4. Query Relations</button>
+                    <button data-example="traversal">5. Graph Traversal</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel" id="results-panel">
+            <div class="panel-header">
+                <span>Results</span>
+                <button id="clear-results-btn">Clear</button>
+            </div>
+            <div class="panel-content">
+                <div class="output" id="output"></div>
+            </div>
+        </div>
+    </main>
+
+    <script type="module">
+        // Example queries - a progressive tutorial
+        const examples = {
+            schema: `# Step 1: Define the schema
+# This creates types for a simple social network
+
+define
+
+# Attributes (properties that things can have)
+attribute name value string;
+attribute age value integer;
+attribute email value string;
+
+# Entity types (nodes in the graph)
+entity person
+    owns name,
+    owns age,
+    owns email @key;
+
+entity company owns name;
+
+# Relation type (edges in the graph)
+relation employment
+    relates employee,
+    relates employer;
+
+# Who can play which roles
+person plays employment:employee;
+company plays employment:employer;`,
+
+            insert: `# Step 2: Insert some data
+# Run this AFTER defining the schema
+
+insert
+
+# Create some people
+$alice isa person,
+    has name "Alice",
+    has age 30,
+    has email "alice@example.com";
+
+$bob isa person,
+    has name "Bob",
+    has age 25,
+    has email "bob@example.com";
+
+$charlie isa person,
+    has name "Charlie",
+    has age 35,
+    has email "charlie@example.com";
+
+# Create a company
+$acme isa company, has name "Acme Corp";
+
+# Create employment relationships
+(employee: $alice, employer: $acme) isa employment;
+(employee: $bob, employer: $acme) isa employment;`,
+
+            query: `# Step 3: Query the data
+# Find all people with their names and ages
+
+match
+$person isa person,
+    has name $name,
+    has age $age;`,
+
+            relations: `# Step 4: Query relationships
+# Find who works at Acme Corp
+
+match
+$person isa person, has name $name;
+$company isa company, has name "Acme Corp";
+(employee: $person, employer: $company) isa employment;`,
+
+            traversal: `# Step 5: Graph traversal with filters
+# Find employees over 25 at any company
+
+match
+$person isa person,
+    has name $name,
+    has age $age;
+$company isa company, has name $company_name;
+(employee: $person, employer: $company) isa employment;
+$age > 25;`
+        };
+
+        // Output helpers
+        const output = document.getElementById('output');
+
+        function log(message, type = 'info') {
+            const div = document.createElement('div');
+            div.className = type;
+            div.innerHTML = `<pre>${escapeHtml(message)}</pre>`;
+            output.appendChild(div);
+            output.scrollTop = output.scrollHeight;
+        }
+
+        // Render a rich value to HTML
+        function renderRichValue(value) {
+            if (!value) return '<span class="value-none">null</span>';
+
+            switch (value.kind) {
+                case 'Entity':
+                    return `<span class="value-entity">${escapeHtml(value.type_name)}</span><span class="value-iid">#${value.iid}</span>`;
+                case 'Relation':
+                    return `<span class="value-relation">${escapeHtml(value.type_name)}</span><span class="value-iid">#${value.iid}</span>`;
+                case 'Attribute':
+                    return `<span class="value-attribute">${escapeHtml(value.type_name)}</span>: ${renderAttributeValue(value.value)}`;
+                case 'Type':
+                    return `<span class="value-type">${value.category}:${escapeHtml(value.label)}</span>`;
+                case 'Value':
+                    return renderAttributeValue(value);
+                case 'ThingList':
+                    return `[${value.items.map(renderRichValue).join(', ')}]`;
+                case 'ValueList':
+                    return `[${value.items.map(renderAttributeValue).join(', ')}]`;
+                case 'None':
+                    return '<span class="value-none">none</span>';
+                default:
+                    // Handle if value is an AttributeValue directly (for Value variant)
+                    if (value.type) {
+                        return renderAttributeValue(value);
+                    }
+                    return `<span class="value-none">${escapeHtml(JSON.stringify(value))}</span>`;
+            }
+        }
+
+        // Render an attribute value to HTML
+        function renderAttributeValue(val) {
+            if (!val) return '<span class="value-none">null</span>';
+
+            switch (val.type) {
+                case 'String':
+                    return `<span class="value-string">"${escapeHtml(val.value)}"</span>`;
+                case 'Integer':
+                case 'Double':
+                case 'Decimal':
+                    return `<span class="value-number">${val.value}</span>`;
+                case 'Boolean':
+                    return `<span class="value-boolean">${val.value}</span>`;
+                case 'Date':
+                case 'DateTime':
+                case 'DateTimeTZ':
+                case 'Duration':
+                    return `<span class="value-string">${escapeHtml(val.value)}</span>`;
+                case 'Struct':
+                    return `<span class="value-string">${escapeHtml(val.value)}</span>`;
+                default:
+                    return escapeHtml(JSON.stringify(val));
+            }
+        }
+
+        // Render an error with nice formatting
+        function renderError(error) {
+            const div = document.createElement('div');
+            div.className = 'error-box';
+
+            let html = `<div class="error-kind">${escapeHtml(error.kind || 'Error')}</div>`;
+            html += `<div class="error-message">${escapeHtml(error.message)}</div>`;
+
+            if (error.location) {
+                html += `<div class="error-location">Line ${error.location.line}, Column ${error.location.column}</div>`;
+                if (error.location.snippet) {
+                    html += `<pre>${escapeHtml(error.location.snippet)}</pre>`;
+                }
+            }
+
+            if (error.hint) {
+                html += `<div class="error-hint">${escapeHtml(error.hint)}</div>`;
+            }
+
+            div.innerHTML = html;
+            return div;
+        }
+
+        function logResult(result) {
+            if (result.success) {
+                if (result.rows && result.rows.length > 0) {
+                    log(`Query returned ${result.row_count} row(s):`, 'success');
+
+                    // Create table for results with rich value rendering
+                    const table = document.createElement('table');
+
+                    // Header row with column names
+                    if (result.columns && result.columns.length > 0) {
+                        const thead = document.createElement('thead');
+                        const headerRow = document.createElement('tr');
+                        result.columns.forEach(col => {
+                            const th = document.createElement('th');
+                            th.textContent = col;
+                            headerRow.appendChild(th);
+                        });
+                        thead.appendChild(headerRow);
+                        table.appendChild(thead);
+                    }
+
+                    // Data rows with rich values
+                    const tbody = document.createElement('tbody');
+                    result.rows.forEach((row) => {
+                        const tr = document.createElement('tr');
+                        // row.values is an array of ColumnValue objects
+                        if (row.values) {
+                            row.values.forEach(colVal => {
+                                const td = document.createElement('td');
+                                td.innerHTML = renderRichValue(colVal.value);
+                                tr.appendChild(td);
+                            });
+                        } else if (Array.isArray(row)) {
+                            // Fallback for simple arrays
+                            row.forEach(cell => {
+                                const td = document.createElement('td');
+                                td.textContent = cell;
+                                tr.appendChild(td);
+                            });
+                        }
+                        tbody.appendChild(tr);
+                    });
+                    table.appendChild(tbody);
+                    output.appendChild(table);
+                } else if (result.row_count !== undefined) {
+                    log(result.message || `Success: ${result.row_count} rows affected`, 'success');
+                } else {
+                    log(result.message || 'Success', 'success');
+                }
+            } else {
+                // Render error with nice formatting
+                if (result.error) {
+                    log(result.message || 'Operation failed', 'error');
+                    output.appendChild(renderError(result.error));
+                } else {
+                    log(result.message || 'Unknown error', 'error');
+                }
+            }
+            output.scrollTop = output.scrollHeight;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function clearOutput() {
+            output.innerHTML = '';
+        }
+
+        // Initialize WASM
+        let db = null;
+
+        async function init() {
+            const statusDot = document.getElementById('status-dot');
+            const statusText = document.getElementById('status-text');
+
+            try {
+                statusText.textContent = 'Loading WASM...';
+
+                // Import the WASM module
+                const wasm = await import('./pkg/wasm_playground.js');
+                await wasm.default();
+
+                statusText.textContent = 'Creating database...';
+
+                // Create the database
+                db = new wasm.TypeDBPlayground('playground');
+
+                statusDot.classList.add('ready');
+                statusText.textContent = 'Ready';
+
+                log('TypeDB Playground initialized!', 'success');
+                log('', 'info');
+                log('Welcome to TypeDB - a database that thinks in concepts and relationships!', 'info');
+                log('', 'info');
+                log('Follow the numbered examples below to learn TypeDB:', 'info');
+                log('  1. Define Schema - Create your data model', 'info');
+                log('  2. Insert Data - Add entities and relationships', 'info');
+                log('  3. Query Data - Find entities by their properties', 'info');
+                log('  4. Query Relations - Traverse the graph', 'info');
+                log('  5. Graph Traversal - Complex queries with filters', 'info');
+                log('', 'info');
+                log('Press Ctrl+Enter or click Run to execute queries.', 'info');
+
+            } catch (e) {
+                statusText.textContent = 'Error';
+                log(`Failed to initialize: ${e.message}`, 'error');
+                console.error(e);
+            }
+        }
+
+        // Update query type indicator based on current query text
+        function updateQueryTypeIndicator() {
+            if (!db) return;
+
+            const queryInput = document.getElementById('query-input');
+            const query = queryInput.value;
+            const indicator = document.getElementById('query-type-indicator');
+            const modeSelect = document.getElementById('tx-mode');
+            const selectedMode = modeSelect.value;
+
+            // Remove all type classes
+            indicator.classList.remove('type-schema', 'type-write', 'type-read', 'type-unknown');
+
+            if (selectedMode !== 'auto') {
+                // Show the forced mode
+                indicator.classList.add(`type-${selectedMode}`);
+                indicator.querySelector('.indicator-label').textContent = selectedMode.toUpperCase();
+                return;
+            }
+
+            // Auto mode - detect from query
+            if (!query.trim()) {
+                indicator.classList.add('type-unknown');
+                indicator.querySelector('.indicator-label').textContent = '-';
+                return;
+            }
+
+            try {
+                const detection = db.detect_query_type(query);
+                const typeClass = `type-${detection.query_type}`;
+                indicator.classList.add(typeClass);
+
+                let label = detection.query_type.toUpperCase();
+                if (detection.keyword && detection.confident) {
+                    label = detection.keyword;
+                }
+                indicator.querySelector('.indicator-label').textContent = label;
+            } catch (e) {
+                indicator.classList.add('type-unknown');
+                indicator.querySelector('.indicator-label').textContent = '?';
+            }
+        }
+
+        // Debounce helper for input events
+        function debounce(fn, delay) {
+            let timeoutId;
+            return function (...args) {
+                clearTimeout(timeoutId);
+                timeoutId = setTimeout(() => fn.apply(this, args), delay);
+            };
+        }
+
+        // Debounced version of updateQueryTypeIndicator
+        const debouncedUpdateIndicator = debounce(updateQueryTypeIndicator, 150);
+
+        // Run query
+        function runQuery() {
+            if (!db) {
+                log('Database not initialized', 'error');
+                return;
+            }
+
+            const queryInput = document.getElementById('query-input');
+            const query = queryInput.value.trim();
+            const modeSelect = document.getElementById('tx-mode');
+            const selectedMode = modeSelect.value;
+
+            if (!query) {
+                log('No query to execute', 'info');
+                return;
+            }
+
+            log(`\n> ${query.split('\n')[0]}${query.includes('\n') ? '...' : ''}`, 'info');
+
+            try {
+                let result;
+                if (selectedMode === 'auto') {
+                    // Let the WASM auto-detect
+                    result = db.execute(query);
+                } else {
+                    // Use explicit mode
+                    result = db.execute_with_mode(query, selectedMode);
+                }
+                logResult(result);
+            } catch (e) {
+                log(`Error: ${e.message}`, 'error');
+            }
+        }
+
+        // Event listeners
+        document.getElementById('run-btn').addEventListener('click', runQuery);
+        document.getElementById('clear-btn').addEventListener('click', () => {
+            document.getElementById('query-input').value = '';
+            updateQueryTypeIndicator();
+        });
+        document.getElementById('clear-results-btn').addEventListener('click', clearOutput);
+
+        // Keyboard shortcut
+        document.getElementById('query-input').addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.key === 'Enter') {
+                e.preventDefault();
+                runQuery();
+            }
+        });
+
+        // Update indicator on text input (debounced)
+        document.getElementById('query-input').addEventListener('input', debouncedUpdateIndicator);
+
+        // Update indicator immediately when mode changes
+        document.getElementById('tx-mode').addEventListener('change', updateQueryTypeIndicator);
+
+        // Example buttons
+        document.querySelectorAll('[data-example]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const example = examples[btn.dataset.example];
+                if (example) {
+                    document.getElementById('query-input').value = example;
+                    updateQueryTypeIndicator();
+                }
+            });
+        });
+
+        // Start
+        init();
+    </script>
+</body>
+</html>

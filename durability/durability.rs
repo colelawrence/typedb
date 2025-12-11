@@ -17,8 +17,10 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "wal")]
 use crate::wal::WALError;
 
+#[cfg(feature = "wal")]
 pub mod wal;
 
 pub trait DurabilityService {
@@ -162,6 +164,7 @@ pub enum DurabilityServiceError {
     IO {
         source: Arc<io::Error>,
     },
+    #[cfg(feature = "wal")]
     WAL {
         source: WALError,
     },
@@ -182,6 +185,7 @@ impl fmt::Display for DurabilityServiceError {
 //     }
 // }
 
+#[cfg(feature = "wal")]
 impl From<WALError> for DurabilityServiceError {
     fn from(source: WALError) -> Self {
         Self::WAL { source }
@@ -199,6 +203,7 @@ impl Error for DurabilityServiceError {
         match self {
             // Self::BincodeSerialize { source, .. } => Some(source),
             Self::IO { source, .. } => Some(source),
+            #[cfg(feature = "wal")]
             Self::WAL { source, .. } => Some(source),
             Self::DeleteFailed { source, .. } => Some(source),
         }

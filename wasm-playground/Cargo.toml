@@ -1,0 +1,52 @@
+[package]
+name = "wasm-playground"
+version = "0.1.0"
+edition = "2021"
+description = "Browser-based TypeDB playground using WebAssembly"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["memory"]
+memory = [
+    "database/memory",
+    "query/memory",
+    "storage/memory",
+    "encoding/memory",
+    "concept/memory",
+    "answer/memory",
+    "ir/memory",
+    "compiler/memory",
+    "executor/memory",
+]
+
+[dependencies]
+wasm-bindgen = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde-wasm-bindgen = "0.6"
+js-sys = "0.3"
+console_error_panic_hook = "0.1"
+
+# TypeDB crates
+database = { path = "../database", default-features = false }
+query = { path = "../query", default-features = false }
+storage = { path = "../storage", default-features = false }
+encoding = { path = "../encoding", default-features = false }
+concept = { path = "../concept", default-features = false }
+answer = { path = "../answer", default-features = false }
+ir = { path = "../ir", default-features = false }
+compiler = { path = "../compiler", default-features = false }
+executor = { path = "../executor", default-features = false }
+options = { path = "../common/options", default-features = false }
+resource = { path = "../resource", default-features = false }
+typeql = { git = "https://github.com/typedb/typeql", tag = "3.7.0", default-features = false }
+lending_iterator = { path = "../common/lending_iterator", default-features = false }
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+[profile.release]
+opt-level = "s"
+lto = true

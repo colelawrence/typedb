@@ -10,8 +10,7 @@ pub(crate) use keyspace::{KeyspaceCheckpointError, KeyspaceError, KEYSPACE_MAXIM
 pub use keyspace::{
     BackendErrorSource, KeyspaceDeleteError, KeyspaceId, KeyspaceOpenError, KeyspaceSet, KeyspaceValidationError,
 };
-// Types that only exist with rocksdb feature:
-#[cfg(feature = "rocksdb")]
+// Keyspace/Keyspaces - exported for both RocksDB and memory builds
 pub(crate) use keyspace::{Keyspace, Keyspaces};
 
 // Backend modules
@@ -23,6 +22,8 @@ pub mod memory_backend;
 mod constants;
 #[cfg(feature = "rocksdb")]
 pub mod iterator;
+// Memory backend iterator module (always available)
+pub mod memory_iterator;
 mod keyspace;
 
 // RocksDB-specific raw iterator module

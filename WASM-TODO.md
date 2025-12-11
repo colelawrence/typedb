@@ -71,12 +71,15 @@ The core blocker is `rocksdb` which has C++ bindings incompatible with WASM.
 - `Keyspaces` should be generic or use type aliases
 - Keep existing `IteratorPool` working with RocksDB backend
 
-### 1.4 Refactor `Keyspace` to Use Backend ⏳ IN PROGRESS
+### 1.4 Refactor `Keyspace` to Use Backend ✅ COMPLETE
 - [x] **File**: `storage/keyspace/keyspace.rs` (MODIFY)
 - [x] **File**: `storage/keyspace/mod.rs` (MODIFY)
 - [x] **File**: `storage/keyspace/iterator.rs` (MODIFY)
 - [x] **File**: `storage/write_batches.rs` (MODIFY)
 - [x] **File**: `storage/Cargo.toml` (MODIFY)
+- [x] **File**: `storage/keyspace/memory_iterator.rs` (CREATE)
+- [x] **File**: `storage/iterator.rs` (MODIFY)
+- [x] **File**: `storage/storage.rs` (MODIFY)
 
 **Approach Changed**: Instead of making `Keyspace` fully generic, we're using feature-gate approach:
 - Added `rocksdb` feature flag (default enabled)
@@ -85,24 +88,22 @@ The core blocker is `rocksdb` which has C++ bindings incompatible with WASM.
 - `IteratorPool` feature-gated with no-op stub for non-RocksDB builds
 
 **Completed**:
-- `keyspace.rs`: `Keyspace` and `Keyspaces` structs feature-gated
+- `keyspace.rs`: `Keyspace` and `Keyspaces` structs feature-gated with memory-backend implementations
 - `keyspace.rs`: `KeyspaceOpenError` and `KeyspaceCheckpointError` have feature-gated variants
 - `mod.rs`: `IteratorPool` feature-gated with RocksDB impl and no-op stub
 - `iterator.rs`: Module feature-gated (RocksDB only)
-- `write_batches.rs`: Module feature-gated (RocksDB only)
+- `memory_iterator.rs`: `MemoryKeyspaceRangeIterator` implementing `LendingIterator` + `Seekable`
+- `write_batches.rs`: Feature-gated with memory-backend `WriteBatches` using `MemoryWriteBatch`
+- `storage/iterator.rs`: Feature-gated `MVCCRangeIterator` with type alias for iterator type
+- `storage.rs`: Feature-gated `create`, `load`, `delete_storage`, `iterate_keyspace_range`, `wait_for_watermark`
 - `Cargo.toml`: Added `rocksdb` feature flag with `optional = true`
 - `rocks_backend.rs`: Fixed `RocksIterator` lifetime issues
 - **All dependent Cargo.toml files**: Updated to explicitly enable `rocksdb` feature (19 files)
-  - Since all dependent crates use `default-features = false`, we explicitly set `features = ["rocksdb"]`
-  - Files updated: database, server, encoding, answer, ir, user, function, tests/behaviour/steps,
-    tests/behaviour/steps/params, encoding/tests, storage/tests, system, concept, concept/tests,
-    executor, query, compiler, database/tools, root Cargo.toml (dev-dep)
 
-**TODO**:
-- [ ] Create memory-backend `Keyspace` and `Keyspaces` implementations
-- [ ] Create memory-backend `KeyspaceRangeIterator` implementation
-- [ ] Create memory-backend `WriteBatches` implementation
-- [ ] Feature-gate `storage.rs` and `isolation_manager.rs` or create memory equivalents
+**Validation**:
+- `cargo check -p storage --no-default-features` ✅ passes
+- `cargo check -p storage` ✅ passes
+- `cargo test -p storage --lib` ✅ passes (11 tests)
 
 ### 1.5 Update Module Exports
 - [x] **File**: `storage/keyspace/mod.rs` (MODIFY)
@@ -113,43 +114,91 @@ The core blocker is `rocksdb` which has C++ bindings incompatible with WASM.
 
 ---
 
-## Phase 2: Durability Abstraction
+## Phase 2: Durability Abstraction ✅ COMPLETE
 
-The `DurabilityClient` trait already exists. We need a no-op implementation.
+The `DurabilityClient` trait already exists. We added a no-op implementation.
 
-### 2.1 Create Noop Durability Client
-- [ ] **File**: `storage/durability_client.rs` (MODIFY) or new file
+### 2.1 Create Noop Durability Client ✅ COMPLETE
+- [x] **File**: `storage/durability_client.rs` (MODIFIED)
 - **Purpose**: In-memory sequence number tracking, no persistence
 - **Implementation**:
   - `NoopDurabilityClient` struct with `AtomicU64` sequence counter
-  - All writes immediately "succeed"
+  - All writes immediately "succeed" with incrementing sequence numbers
   - `request_sync()` returns immediately-resolved receiver
-  - Iterators return empty
+  - All iterators return empty results
+- **Gate**: `#[cfg(not(feature = "wal"))]`
 
-### 2.2 Feature-Gate WAL
-- [ ] **File**: `durability/wal.rs` (MODIFY)
-- **Gate**: `#[cfg(not(target_arch = "wasm32"))]` for entire module
-- **Dependencies**: `std::fs`, `std::thread`, `lz4` - all unavailable in WASM
+### 2.2 Feature-Gate WAL ✅ COMPLETE
+- [x] **File**: `durability/Cargo.toml` (MODIFIED)
+- [x] **File**: `durability/durability.rs` (MODIFIED)
+- [x] **File**: `storage/Cargo.toml` (MODIFIED)
+- [x] **File**: `storage/recovery/mod.rs` (MODIFIED)
+- [x] **File**: `storage/storage.rs` (MODIFIED)
+- **Approach**: Feature-gate WAL within durability crate (not full module exclusion)
+  - Added `wal` feature to durability: `wal = ["dep:lz4"]`
+  - Made `lz4` dependency optional
+  - Feature-gated `pub mod wal` and `WALError` references
+  - Storage crate forwards feature: `wal = ["durability/wal"]`
+  - Recovery module has stub types for non-wal builds (Checkpoint, error types)
+  - `checkpoint()` method feature-gated in Storage
+
+**Validation**:
+- `cargo check -p durability --no-default-features` ✅ passes
+- `cargo check -p durability` ✅ passes
+- `cargo check -p storage --no-default-features --features memory` ✅ passes
+- `cargo check -p storage` ✅ passes
 
 ---
 
-## Phase 3: Server Component Feature Gates
+## Phase 3: Higher-Level Crate Feature Propagation
 
-These components are not needed for embedded WASM use.
+Propagating `memory` feature to crates that depend on storage/durability.
 
-### 3.1 Gate Server Module
+### 3.1 Encoding Crate ✅ COMPLETE
+- [x] **File**: `encoding/Cargo.toml` (MODIFY)
+- [x] **File**: `encoding/encoding.rs` (MODIFY)
+- **Changes**:
+  - Added `rocksdb` (default) and `memory` features
+  - `rocksdb = ["storage/rocksdb", "storage/wal", "dep:rocksdb"]`
+  - `memory = ["storage/memory"]`
+  - Made `rocksdb` dep optional
+  - Feature-gated `rocks_configuration()` method and RocksDB imports
+
+**Validation**:
+- `cargo check -p encoding --no-default-features --features memory` ✅
+- `cargo check -p encoding --target wasm32-unknown-unknown --no-default-features --features memory` ✅
+
+### 3.2 Concept Crate ✅ COMPLETE
+- [x] **File**: `concept/Cargo.toml` (MODIFY)
+- [x] **File**: `concept/thing/statistics.rs` (MODIFY)
+- **Changes**:
+  - Added `rocksdb` (default) and `memory` features
+  - `rocksdb = ["storage/rocksdb", "storage/wal", "encoding/rocksdb"]`
+  - `memory = ["storage/memory", "encoding/memory"]`
+  - Feature-gated `recovery::commit_recovery` imports in statistics.rs
+  - Split `may_synchronise()` into rocksdb (full WAL replay) and memory (no-op) versions
+  - Split `StatisticsError` variants (rocksdb includes `ReloadCommitData`, memory doesn't)
+
+**Validation**:
+- `cargo check -p concept --no-default-features --features memory` ✅
+- `cargo check -p concept --target wasm32-unknown-unknown --no-default-features --features memory` ✅
+
+### 3.3 Gate Server Module (Future)
 - [ ] **File**: `server/lib.rs` (MODIFY)
 - **Gate**: `#[cfg(not(target_arch = "wasm32"))]`
 - **Affects**: gRPC (tonic), HTTP (axum), TLS (rustls)
+- **Note**: Not needed for embedded WASM - can skip entirely
 
-### 3.2 Gate Diagnostics
+### 3.4 Gate Diagnostics (Future)
 - [ ] **File**: `diagnostics/lib.rs` (MODIFY)
 - **Gate**: Feature flag or arch gate
 - **Affects**: hyper server, HTTPS client, sentry
+- **Note**: Not needed for embedded WASM - can skip entirely
 
-### 3.3 Gate Main Binary
+### 3.5 Gate Main Binary (Future)
 - [ ] **File**: `main.rs` (MODIFY)
 - **Changes**: Conditional compilation for WASM vs native entry points
+- **Note**: Not needed for embedded WASM - can skip entirely
 
 ---
 
@@ -207,21 +256,30 @@ cargo test   # Existing tests should pass
 
 ## File Change Summary
 
-| File | Action | Phase |
-|------|--------|-------|
-| `storage/keyspace/backend.rs` | CREATE | 1.1 |
-| `storage/keyspace/rocks_backend.rs` | CREATE | 1.2 |
-| `storage/keyspace/memory_backend.rs` | CREATE | 1.3 |
-| `storage/keyspace/keyspace.rs` | MODIFY | 1.4 |
-| `storage/keyspace/mod.rs` | MODIFY | 1.5 |
-| `storage/durability_client.rs` | MODIFY | 2.1 |
-| `durability/wal.rs` | MODIFY | 2.2 |
-| `server/lib.rs` | MODIFY | 3.1 |
-| `diagnostics/lib.rs` | MODIFY | 3.2 |
-| `main.rs` | MODIFY | 3.3 |
-| `Cargo.toml` | MODIFY | 4.1 |
-| `storage/Cargo.toml` | MODIFY | 4.2 |
-| `durability/Cargo.toml` | MODIFY | 4.3 |
+| File | Action | Phase | Status |
+|------|--------|-------|--------|
+| `storage/keyspace/backend.rs` | CREATE | 1.1 | ✅ |
+| `storage/keyspace/rocks_backend.rs` | CREATE | 1.2 | ✅ |
+| `storage/keyspace/memory_backend.rs` | CREATE | 1.3 | ✅ |
+| `storage/keyspace/keyspace.rs` | MODIFY | 1.4 | ✅ |
+| `storage/keyspace/mod.rs` | MODIFY | 1.5 | ✅ |
+| `storage/keyspace/memory_iterator.rs` | CREATE | 1.4 | ✅ |
+| `storage/write_batches.rs` | MODIFY | 1.4 | ✅ |
+| `storage/iterator.rs` | MODIFY | 1.4 | ✅ |
+| `storage/storage.rs` | MODIFY | 1.4, 2.2 | ✅ |
+| `storage/durability_client.rs` | MODIFY | 2.1 | ✅ |
+| `storage/recovery/mod.rs` | MODIFY | 2.2 | ✅ |
+| `durability/durability.rs` | MODIFY | 2.2 | ✅ |
+| `durability/Cargo.toml` | MODIFY | 2.2 | ✅ |
+| `storage/Cargo.toml` | MODIFY | 1.4, 2.2 | ✅ |
+| `encoding/Cargo.toml` | MODIFY | 3.1 | ✅ |
+| `encoding/encoding.rs` | MODIFY | 3.1 | ✅ |
+| `concept/Cargo.toml` | MODIFY | 3.2 | ✅ |
+| `concept/thing/statistics.rs` | MODIFY | 3.2 | ✅ |
+| `server/lib.rs` | MODIFY | 3.3 | skipped |
+| `diagnostics/lib.rs` | MODIFY | 3.4 | skipped |
+| `main.rs` | MODIFY | 3.5 | skipped |
+| `Cargo.toml` | MODIFY | 4.1 | pending |
 
 ---
 
@@ -270,3 +328,84 @@ Need abstract batch builder or per-backend batch type.
 | 2025-12-10 | 1.4 | ⏳ | Feature-gated RocksDB code, updated errors. See 1.4 TODO for remaining work |
 | 2025-12-10 | 1.5 | ✅ | Updated mod.rs with feature-gated exports |
 | 2025-12-10 | 1.4 | ✅ | Fixed feature propagation: updated all 19 dependent Cargo.toml files to enable `rocksdb` feature. `cargo check -p storage` and `cargo test -p storage` pass. |
+| 2025-12-10 | 1.4 | ✅ | **Phase 1 Complete!** Memory-backend Keyspace/Keyspaces, MemoryKeyspaceRangeIterator, WriteBatches, and feature-gated storage.rs all implemented. Native compilation and tests pass. |
+| 2025-12-10 | 2.1 | ✅ | Created `NoopDurabilityClient` in `durability_client.rs` with AtomicU64 sequence tracking |
+| 2025-12-10 | 2.2 | ✅ | Feature-gated WAL in durability crate, added stub types in recovery/mod.rs |
+| 2025-12-10 | 2.x | ✅ | **Phase 2 Complete!** Durability abstraction done. `lz4` is now optional via `wal` feature. |
+| 2025-12-10 | 3.1 | ✅ | Feature-gated encoding crate with `rocksdb`/`memory` features. WASM compiles. |
+| 2025-12-10 | 3.2 | ✅ | Feature-gated concept crate. Split statistics.rs `may_synchronise()` for wal/no-wal. WASM compiles. |
+
+---
+
+## Phase 2 Risks & Considerations
+
+### Valid Feature Combinations
+
+| Configuration | Use Case | Persistence | Crash Recovery |
+|--------------|----------|-------------|----------------|
+| `default` (rocksdb + wal) | Production server | ✅ Yes | ✅ Yes |
+| `memory` (no rocksdb, no wal) | WASM / ephemeral | ❌ No | ❌ N/A |
+| `rocksdb` without `wal` | **INVALID** | ⚠️ Partial | ❌ No |
+
+**Compile-time guard added**: `storage.rs` now emits `compile_error!` if rocksdb is enabled without wal.
+
+### Features Lost Without WAL
+
+For WASM/ephemeral builds (`--features memory --no-default-features`):
+
+1. **No persistence** - All data lost when process ends (expected for in-browser use)
+2. **No crash recovery** - No WAL replay on restart
+3. **No checkpointing** - `checkpoint()` method not available
+4. **Statistics reset** - Query planner cardinality estimates reset each session
+
+These are acceptable tradeoffs for the WASM use case where the database is ephemeral by design.
+
+### Downstream Dependencies
+
+- **`concept/thing/statistics.rs`**: Imports `recovery::commit_recovery` for statistics sync. If building concept crate without wal, this import will need feature-gating.
+- **`database` crate**: Hardcoded to `Database<WALClient>`. For WASM, use `MVCCStorage` directly with `NoopDurabilityClient` rather than the full Database abstraction.
+
+### NoopDurabilityClient Behavior
+
+The `NoopDurabilityClient` silently succeeds on all operations:
+- `sequenced_write()` returns incrementing sequence numbers (no persistence)
+- `iter_from()` returns empty iterator (no historical data)
+- `request_sync()` returns immediately (no actual fsync)
+
+This is intentional - it allows the MVCC machinery to work unchanged while data remains ephemeral.
+
+---
+
+## Next Steps: Phase 4+
+
+**Phase 1 (Storage Layer Abstraction), Phase 2 (Durability Abstraction), and Phase 3.1-3.2 (Encoding/Concept) are complete.**
+
+### WASM Compilation Status
+
+**Crates that compile for wasm32-unknown-unknown:**
+```bash
+cargo check -p durability --target wasm32-unknown-unknown --no-default-features  # ✅
+cargo check -p storage --target wasm32-unknown-unknown --no-default-features --features memory  # ✅
+cargo check -p encoding --target wasm32-unknown-unknown --no-default-features --features memory  # ✅
+cargo check -p concept --target wasm32-unknown-unknown --no-default-features --features memory  # ✅
+```
+
+### Remaining Work
+
+To enable full WASM compilation of query/database layers:
+
+1. **Continue feature propagation** (Phase 4.x):
+   - Add `memory` feature to: `database`, `query`, `executor`, `function`, etc.
+   - Each crate's Cargo.toml needs `rocksdb` and `memory` features forwarding to dependencies
+   - Pattern established: `rocksdb = ["storage/rocksdb", "storage/wal", "encoding/rocksdb", ...]`
+
+2. **Database crate considerations**:
+   - Currently hardcoded to `Database<WALClient>`
+   - For WASM, may want `MVCCStorage` directly with `NoopDurabilityClient`
+   - Or make Database generic over durability client
+
+3. **WASM entry point** (Final phase):
+   - Create a minimal crate that exposes TypeDB query API for WASM
+   - Compile with `--features memory --no-default-features`
+
+Server/diagnostics gates (3.3-3.5) can be skipped entirely - not needed for embedded WASM use.
