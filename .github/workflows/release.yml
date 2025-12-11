@@ -117,11 +117,14 @@ jobs:
         if: runner.os == 'Windows'
         run: choco install protoc
 
-      - name: Build Server
-        run: cargo build --release --target ${{ matrix.target }}
-
-      - name: Build Console
-        run: cargo build --release --target ${{ matrix.target }} --manifest-path console/Cargo.toml
+      - name: Build Server and Console
+        run: |
+          cargo build --release --target ${{ matrix.target }} &
+          SERVER_PID=$!
+          cargo build --release --target ${{ matrix.target }} --manifest-path console/Cargo.toml &
+          CONSOLE_PID=$!
+          wait $SERVER_PID
+          wait $CONSOLE_PID
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
