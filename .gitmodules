@@ -1,3 +1,6 @@
 [submodule "studio"]
 	path = studio
 	url = https://github.com/colelawrence/typedb-studio
+[submodule "typeql"]
+	path = typeql
+	url = https://github.com/colelawrence/typeql.git

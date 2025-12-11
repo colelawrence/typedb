@@ -80,30 +80,89 @@ pub struct AnnotationDoc {
 
 ---
 
-## Stage 1: TypeQL Grammar & AST (External Repo)
+## Stage 1: TypeQL Grammar & AST
 **Effort: M (2-4 hours)**
-**Repo: github.com/typedb/typeql**
+**Location: `typeql/` submodule** (github.com/colelawrence/typeql)
+
+### Setup (already done)
+The TypeQL repo is now a git submodule at `typeql/` and patched in `Cargo.toml`:
+
+```toml
+[patch."https://github.com/typedb/typeql"]
+typeql = { path = "typeql/rust" }
+```
+
+This means all changes to `typeql/rust/` are immediately available to the TypeDB crates.
 
 ### Tasks
 
 #### 1.1 Add `@doc` annotation syntax
-- [ ] Add `Doc` variant to `token::Annotation` enum
-- [ ] Add grammar rule for `@doc(positional?, kwargs*)`
-- [ ] Add `annotation::Doc` AST struct:
+
+**File: `typeql/rust/common/token.rs`** (line ~146)
+- [ ] Add `Doc = "doc"` to `string_enum! { Annotation ... }`
+
+**File: `typeql/rust/parser/typeql.pest`**
+- [ ] Add `ANNOTATION_DOC = @{ "@doc" ~ WB }` (line ~475)
+- [ ] Add `annotation_doc` rule with positional + kwargs:
+  ```pest
+  annotation_doc = { ANNOTATION_DOC ~ PAREN_OPEN ~ doc_args ~ PAREN_CLOSE }
+  doc_args = { doc_positional? ~ ( COMMA ~ doc_kwarg )* ~ COMMA? }
+  doc_positional = { quoted_string_literal }
+  doc_kwarg = { identifier ~ ASSIGN ~ value_literal }
+  ```
+- [ ] Add `| annotation_doc` to `annotation` rule (line ~337)
+- [ ] Add `| ANNOTATION_DOC` to `annotation_category` rule (line ~449)
+
+**File: `typeql/rust/annotation.rs`**
+- [ ] Add `Doc` struct:
   ```rust
+  #[derive(Debug, Clone, Eq, PartialEq)]
   pub struct Doc {
-      pub description: Option<Spanned<StringLiteral>>,
-      pub kwargs: Vec<(Spanned<Identifier>, Spanned<Literal>)>,
+      pub span: Option<Span>,
+      pub description: Option<StringLiteral>,
+      pub kwargs: Vec<(Identifier, Literal)>,
   }
   ```
-- [ ] Add `typeql::Annotation::Doc(annotation::Doc)` variant
-- [ ] Add parse error for invalid syntax (non-string positional, positional after kwargs)
+- [ ] Add `Doc(Doc)` variant to `enum Annotation`
+- [ ] Implement `Spanned` and `Display` for `Doc`
+
+**File: `typeql/rust/parser/annotation.rs`**
+- [ ] Import `Doc` in the use statement
+- [ ] Add `Rule::annotation_doc => Annotation::Doc(visit_annotation_doc(child))` to match
+- [ ] Add `visit_annotation_doc` function:
+  ```rust
+  fn visit_annotation_doc(node: Node<'_>) -> Doc {
+      debug_assert_eq!(node.as_rule(), Rule::annotation_doc);
+      let span = node.span();
+      let mut children = node.into_children();
+      children.skip_expected(Rule::ANNOTATION_DOC);
+      
+      let description = children
+          .try_consume_expected(Rule::doc_positional)
+          .map(|n| visit_quoted_string_literal(n.into_child()));
+      
+      let kwargs = children
+          .filter(|n| n.as_rule() == Rule::doc_kwarg)
+          .map(visit_doc_kwarg)
+          .collect();
+      
+      Doc::new(span, description, kwargs)
+  }
+  ```
 
 #### 1.2 Add `///` doc comment syntax
-- [ ] Add `///` token recognition in lexer (distinct from `#` comments)
-- [ ] Collect consecutive `///` lines before a declaration
-- [ ] Lower `/// text` lines into `@doc("text")` annotations on the following item
-- [ ] Handle leading whitespace: `///  text` → `@doc(" text")` (preserve indent after `/// `)
+
+**File: `typeql/rust/parser/typeql.pest`**
+- [ ] Add `DOC_COMMENT` rule (NOT silent, unlike `COMMENT`):
+  ```pest
+  DOC_COMMENT = @{ "///" ~ (!NEWLINE ~ ANY)* }
+  ```
+- [ ] Decide: handle in parser or as post-processing step?
+  - **Option A (simpler):** Parser collects `DOC_COMMENT` tokens, attaches to next declaration
+  - **Option B:** Lexer emits doc comments, parser ignores them, post-process attaches
+
+**File: `typeql/rust/parser/mod.rs` or new file**
+- [ ] Add doc comment collection logic that converts consecutive `///` lines to `@doc` annotations
 
 ### Verification
 ```bash
