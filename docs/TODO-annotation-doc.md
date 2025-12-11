@@ -26,8 +26,44 @@ define
 | Allowed on types? | entity/relation/attribute/role | ✅ All four |
 | Allowed on edges? | owns/plays/relates | ❌ Not in v1 (extend later) |
 | Description required? | `@doc("text")` vs `@doc(color="blue")` | Optional (allow metadata-only) |
-| Multiple `@doc` per type? | Error vs last-wins | Last-wins (simpler) |
+| Multiple `@doc` per type? | Error vs join with newline | **Join with newline** (enables `///` syntax) |
 | Redefinition behavior | Replace vs merge metadata | Replace entirely |
+
+### Doc Comment Syntax (`///`)
+
+Support Rust-style doc comments as syntactic sugar:
+
+```typeql
+/// A person in the system.
+/// 
+/// ## Attributes
+/// - name: The person's full name
+/// - age: Age in years
+person sub entity,
+  owns name,
+  owns age;
+```
+
+**Lowering:** The parser converts `///` lines into `@doc("...")` annotations on the following declaration:
+
+```typeql
+person sub entity,
+  @doc("A person in the system."),
+  @doc(""),
+  @doc("## Attributes"),
+  @doc("- name: The person's full name"),
+  @doc("- age: Age in years"),
+  owns name,
+  owns age;
+```
+
+**Engine behavior:** Multiple `@doc` annotations on the same element are **joined with newlines** into a single `AnnotationDoc.description`.
+
+This approach:
+- Keeps grammar simple (`///` is just a special comment token)
+- No need for triple-quote strings
+- Familiar to Rust/TypeScript/C# developers
+- Metadata kwargs still use explicit `@doc(color="blue")` syntax
 
 ### Proposed Internal Model
 ```rust
@@ -49,6 +85,8 @@ pub struct AnnotationDoc {
 **Repo: github.com/typedb/typeql**
 
 ### Tasks
+
+#### 1.1 Add `@doc` annotation syntax
 - [ ] Add `Doc` variant to `token::Annotation` enum
 - [ ] Add grammar rule for `@doc(positional?, kwargs*)`
 - [ ] Add `annotation::Doc` AST struct:
@@ -61,6 +99,12 @@ pub struct AnnotationDoc {
 - [ ] Add `typeql::Annotation::Doc(annotation::Doc)` variant
 - [ ] Add parse error for invalid syntax (non-string positional, positional after kwargs)
 
+#### 1.2 Add `///` doc comment syntax
+- [ ] Add `///` token recognition in lexer (distinct from `#` comments)
+- [ ] Collect consecutive `///` lines before a declaration
+- [ ] Lower `/// text` lines into `@doc("text")` annotations on the following item
+- [ ] Handle leading whitespace: `///  text` → `@doc(" text")` (preserve indent after `/// `)
+
 ### Verification
 ```bash
 # In typeql repo
@@ -69,16 +113,27 @@ cargo test
 
 **Test cases to add:**
 ```rust
-// Valid
+// @doc annotation - Valid
 assert_parses!("@doc(\"A person\")");
 assert_parses!("@doc(\"A person\", color=\"blue\")");
 assert_parses!("@doc(color=\"blue\", category=\"core\")");
 assert_parses!("@doc(\"desc\", count=42, active=true)");
 
-// Invalid
+// @doc annotation - Invalid
 assert_parse_error!("@doc(123)");           // non-string positional
 assert_parse_error!("@doc(\"a\", \"b\")");  // two positionals
 assert_parse_error!("@doc(x=\"y\", \"z\")"); // positional after kwarg
+
+// /// doc comments
+assert_parses!("/// A person\nperson sub entity;");
+assert_parses!("/// Line 1\n/// Line 2\nperson sub entity;");
+assert_parses!("/// Markdown **bold**\nperson sub entity;");
+
+// Verify lowering
+let ast = parse("/// Hello\n/// World\nperson sub entity;");
+assert_eq!(ast.type_def.annotations.len(), 2);
+assert_eq!(ast.type_def.annotations[0], Annotation::Doc(Doc { description: "Hello", .. }));
+assert_eq!(ast.type_def.annotations[1], Annotation::Doc(Doc { description: "World", .. }));
 ```
 
 ### Rollback
@@ -287,13 +342,47 @@ Can map `typeql::Annotation::Doc` to `UnimplementedLanguageFeature` error tempor
   ),
   ```
 
-#### 4.4 Handle redefinition
+#### 4.4 Handle multiple `@doc` annotations (join with newlines)
+**Files: `query/define.rs` or `concept/type_/type_manager.rs`**
+
+- [ ] When multiple `@doc` annotations appear on same element:
+  - Join all `description` fields with `\n`
+  - Merge `metadata` maps (later wins on key conflict)
+- [ ] Implementation approach:
+  ```rust
+  fn merge_doc_annotations(annotations: &[Annotation]) -> Option<AnnotationDoc> {
+      let docs: Vec<&AnnotationDoc> = annotations
+          .iter()
+          .filter_map(|a| match a { Annotation::Doc(d) => Some(d), _ => None })
+          .collect();
+      
+      if docs.is_empty() { return None; }
+      
+      let description = docs
+          .iter()
+          .filter_map(|d| d.description())
+          .collect::<Vec<_>>()
+          .join("\n");
+      
+      let mut metadata = BTreeMap::new();
+      for doc in &docs {
+          metadata.extend(doc.metadata().clone());
+      }
+      
+      Some(AnnotationDoc::new(
+          if description.is_empty() { None } else { Some(description) },
+          metadata,
+      ))
+  }
+  ```
+
+#### 4.5 Handle redefinition
 **Files: `query/define.rs`, `query/redefine.rs`**
 
-- [ ] Ensure `@doc` overwrites previous doc (not accumulates)
+- [ ] Ensure `@doc` overwrites previous doc (not accumulates across transactions)
 - [ ] Ensure redefinition without `@doc` preserves existing doc
 
-#### 4.5 Update exhaustive matches
+#### 4.6 Update exhaustive matches
 - [ ] Search for `match.*Annotation` and `match.*AnnotationCategory`
 - [ ] Add `Doc` arms everywhere (compiler will help find these)
 
@@ -313,10 +402,30 @@ fn test_define_type_with_doc() {
 }
 
 #[test]
+fn test_multiple_doc_annotations_joined() {
+    // define person sub entity, @doc("Line 1"), @doc("Line 2"), @doc("Line 3");
+    // Verify: description == "Line 1\nLine 2\nLine 3"
+}
+
+#[test]
+fn test_doc_comment_syntax_joined() {
+    // /// Line 1
+    // /// Line 2
+    // person sub entity;
+    // Verify: description == "Line 1\nLine 2"
+}
+
+#[test]
+fn test_doc_metadata_merge() {
+    // define person sub entity, @doc("desc", color="blue"), @doc(category="core");
+    // Verify: description == "desc", metadata == { color: "blue", category: "core" }
+}
+
+#[test]
 fn test_redefine_type_doc() {
     // define person sub entity, @doc("Original");
     // redefine person sub entity, @doc("Updated", color="red");
-    // Verify doc is replaced entirely
+    // Verify doc is replaced entirely (not appended)
 }
 
 #[test]
