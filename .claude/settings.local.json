@@ -19,7 +19,8 @@
       "Bash(npm run build:*)",
       "Bash(cat:*)",
       "Bash(rustc:*)",
-      "Bash(RUSTFLAGS=\"--cap-lints=warn\" cargo test:*)"
+      "Bash(RUSTFLAGS=\"--cap-lints=warn\" cargo test:*)",
+      "Bash(wc:*)"
     ],
     "deny": [],
     "ask": []
