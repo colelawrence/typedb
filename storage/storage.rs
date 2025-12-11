@@ -8,14 +8,23 @@
 #![deny(elided_lifetimes_in_paths)]
 #![allow(clippy::module_inception)]
 
+// Compile-time guard: RocksDB requires WAL for crash recovery.
+// Using persistent storage without durability guarantees would silently lose data.
+#[cfg(all(feature = "rocksdb", not(feature = "wal")))]
+compile_error!(
+    "The `rocksdb` feature requires `wal` for crash recovery. \
+     Use `--features memory` for ephemeral in-memory storage without WAL."
+);
+
 use std::{
     error::Error,
-    fs, io,
+    io,
     path::{Path, PathBuf},
     sync::{atomic::Ordering, Arc},
-    thread::sleep,
-    time::Duration,
 };
+
+#[cfg(feature = "rocksdb")]
+use std::{fs, thread::sleep, time::Duration};
 
 use ::error::typedb_error;
 use bytes::{byte_array::ByteArray, Bytes};
@@ -37,17 +46,22 @@ use crate::{
     iterator::MVCCRangeIterator,
     key_range::KeyRange,
     key_value::{StorageKey, StorageKeyReference},
-    keyspace::{
-        iterator::KeyspaceRangeIterator, IteratorPool, Keyspace, KeyspaceError, KeyspaceId, KeyspaceOpenError,
-        KeyspaceSet, Keyspaces,
-    },
-    recovery::{
-        checkpoint::{Checkpoint, CheckpointCreateError, CheckpointLoadError},
-        commit_recovery::{apply_recovered, load_commit_data_from, StorageRecoveryError},
-    },
+    keyspace::{IteratorPool, Keyspace, KeyspaceError, KeyspaceId, KeyspaceOpenError, KeyspaceSet, Keyspaces},
     sequence_number::SequenceNumber,
     snapshot::{write::Write, CommittableSnapshot, ReadSnapshot, SchemaSnapshot, WriteSnapshot},
 };
+#[cfg(feature = "wal")]
+use crate::recovery::{
+    checkpoint::{Checkpoint, CheckpointCreateError, CheckpointLoadError},
+    commit_recovery::{apply_recovered, load_commit_data_from, StorageRecoveryError},
+};
+#[cfg(not(feature = "wal"))]
+use crate::recovery::{Checkpoint, CheckpointCreateError, CheckpointLoadError, StorageRecoveryError};
+
+#[cfg(feature = "rocksdb")]
+use crate::keyspace::iterator::KeyspaceRangeIterator;
+#[cfg(not(feature = "rocksdb"))]
+use crate::keyspace::memory_iterator::MemoryKeyspaceRangeIterator as KeyspaceRangeIterator;
 
 pub mod durability_client;
 pub mod error;
@@ -73,6 +87,7 @@ pub struct MVCCStorage<Durability> {
 impl<Durability> MVCCStorage<Durability> {
     pub const STORAGE_DIR_NAME: &'static str = "storage";
 
+    #[cfg(feature = "rocksdb")]
     pub fn create<KS: KeyspaceSet>(
         name: impl AsRef<str>,
         path: &Path,
@@ -103,6 +118,30 @@ impl<Durability> MVCCStorage<Durability> {
         })
     }
 
+    /// Create an in-memory storage (for WASM/memory backend).
+    #[cfg(not(feature = "rocksdb"))]
+    pub fn create<KS: KeyspaceSet>(
+        name: impl AsRef<str>,
+        path: &Path,
+        mut durability_client: Durability,
+    ) -> Result<Self, StorageOpenError>
+    where
+        Durability: DurabilityClient,
+    {
+        let storage_dir = path.join(Self::STORAGE_DIR_NAME);
+        Self::register_durability_record_types(&mut durability_client);
+        let keyspaces = Self::create_keyspaces::<KS>(name.as_ref(), &storage_dir)?;
+
+        let isolation_manager = IsolationManager::new(durability_client.current());
+        Ok(Self {
+            name: Arc::new(name.as_ref().to_owned()),
+            path: storage_dir,
+            durability_client,
+            keyspaces,
+            isolation_manager,
+        })
+    }
+
     fn create_keyspaces<KS: KeyspaceSet>(
         name: impl AsRef<str>,
         storage_dir: &Path,
@@ -112,6 +151,7 @@ impl<Durability> MVCCStorage<Durability> {
         Ok(keyspaces)
     }
 
+    #[cfg(feature = "rocksdb")]
     pub fn load<KS: KeyspaceSet>(
         name: impl AsRef<str>,
         path: &Path,
@@ -150,6 +190,22 @@ impl<Durability> MVCCStorage<Durability> {
 
         let isolation_manager = IsolationManager::new(next_sequence_number);
         Ok(Self { name: Arc::new(name.to_owned()), path: storage_dir, durability_client, keyspaces, isolation_manager })
+    }
+
+    /// Load/create an in-memory storage (for WASM/memory backend).
+    /// Note: Checkpoint and recovery are not supported for memory backend.
+    #[cfg(not(feature = "rocksdb"))]
+    pub fn load<KS: KeyspaceSet>(
+        name: impl AsRef<str>,
+        path: &Path,
+        mut durability_client: Durability,
+        _checkpoint: &Option<Checkpoint>,
+    ) -> Result<Self, StorageOpenError>
+    where
+        Durability: DurabilityClient,
+    {
+        // Memory backend: just create fresh storage (no recovery)
+        Self::create::<KS>(name, path, durability_client)
     }
 
     fn register_durability_record_types(durability_client: &mut impl DurabilityClient) {
@@ -210,7 +266,10 @@ impl<Durability> MVCCStorage<Durability> {
         // See detailed analysis at https://github.com/typedb/typedb/pull/7254/
         let mut watermark = self.snapshot_watermark();
         while watermark < target {
+            #[cfg(feature = "rocksdb")]
             sleep(Duration::from_micros(WATERMARK_WAIT_INTERVAL_MICROSECONDS));
+            #[cfg(not(feature = "rocksdb"))]
+            std::hint::spin_loop();
             watermark = self.snapshot_watermark();
         }
         watermark
@@ -348,10 +407,12 @@ impl<Durability> MVCCStorage<Durability> {
         self.keyspaces.get(keyspace_id)
     }
 
+    #[cfg(feature = "wal")]
     pub fn checkpoint(&self, checkpoint: &Checkpoint) -> Result<(), CheckpointCreateError> {
         checkpoint.add_storage(&self.keyspaces, self.snapshot_watermark())
     }
 
+    #[cfg(feature = "rocksdb")]
     pub fn delete_storage(self) -> Result<(), StorageDeleteError>
     where
         Durability: DurabilityClient,
@@ -371,6 +432,23 @@ impl<Durability> MVCCStorage<Durability> {
             })?;
         }
 
+        Ok(())
+    }
+
+    #[cfg(not(feature = "rocksdb"))]
+    pub fn delete_storage(self) -> Result<(), StorageDeleteError>
+    where
+        Durability: DurabilityClient,
+    {
+        use StorageDeleteError::{DurabilityDelete, KeyspaceDelete};
+
+        self.keyspaces.delete().map_err(|errs| KeyspaceDelete { name: self.name.clone(), errors: errs })?;
+
+        self.durability_client
+            .delete_durability()
+            .map_err(|err| DurabilityDelete { name: self.name.clone(), typedb_source: err })?;
+
+        // Memory backend: no directory to delete
         Ok(())
     }
 
@@ -474,6 +552,7 @@ impl<Durability> MVCCStorage<Durability> {
             .get_prev(key.bytes(), |raw_key, v| key_value_mapper(&MVCCKey::wrap_slice(raw_key), v))
     }
 
+    #[cfg(feature = "rocksdb")]
     pub fn iterate_keyspace_range<'this, const PREFIX_INLINE: usize>(
         &'this self,
         iterator_pool: &IteratorPool,
@@ -482,6 +561,20 @@ impl<Durability> MVCCStorage<Durability> {
     ) -> KeyspaceRangeIterator {
         self.keyspaces.get(range.start().get_value().keyspace_id()).iterate_range(
             iterator_pool,
+            &range.map(|k| k.as_bytes(), |fixed| fixed),
+            storage_counters,
+        )
+    }
+
+    #[cfg(not(feature = "rocksdb"))]
+    pub fn iterate_keyspace_range<'this, const PREFIX_INLINE: usize>(
+        &'this self,
+        _iterator_pool: &IteratorPool,
+        range: KeyRange<StorageKey<'this, PREFIX_INLINE>>,
+        storage_counters: StorageCounters,
+    ) -> KeyspaceRangeIterator {
+        // Memory backend doesn't use iterator pool
+        self.keyspaces.get(range.start().get_value().keyspace_id()).iterate_range(
             &range.map(|k| k.as_bytes(), |fixed| fixed),
             storage_counters,
         )

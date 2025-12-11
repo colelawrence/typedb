@@ -11,6 +11,7 @@ use std::{fmt, slice};
 
 use compiler::VariablePosition;
 use ir::pattern::BranchID;
+#[cfg(feature = "rocksdb")]
 use tokio::sync::broadcast::error::TryRecvError;
 
 pub mod batch;
@@ -68,11 +69,14 @@ impl fmt::Display for InterruptType {
     }
 }
 
+/// ExecutionInterrupt with tokio broadcast channel support (for RocksDB/server builds).
+#[cfg(feature = "rocksdb")]
 #[derive(Debug)]
 pub struct ExecutionInterrupt {
     signal: Option<tokio::sync::broadcast::Receiver<InterruptType>>,
 }
 
+#[cfg(feature = "rocksdb")]
 impl ExecutionInterrupt {
     pub fn new(signal: tokio::sync::broadcast::Receiver<InterruptType>) -> Self {
         Self { signal: Some(signal) }
@@ -100,10 +104,30 @@ impl ExecutionInterrupt {
     }
 }
 
+#[cfg(feature = "rocksdb")]
 impl Clone for ExecutionInterrupt {
     // Note: going against tokio's broadcast signal convention, which explicitly isn't `clone()`
     fn clone(&self) -> Self {
         Self { signal: self.signal.as_ref().map(|signal| signal.resubscribe()) }
+    }
+}
+
+/// ExecutionInterrupt for in-memory/WASM builds (no tokio dependency).
+/// Only supports uninterruptible execution - queries cannot be cancelled.
+#[cfg(not(feature = "rocksdb"))]
+#[derive(Debug, Clone)]
+pub struct ExecutionInterrupt {
+    _private: (),
+}
+
+#[cfg(not(feature = "rocksdb"))]
+impl ExecutionInterrupt {
+    pub fn new_uninterruptible() -> Self {
+        Self { _private: () }
+    }
+
+    pub fn check(&mut self) -> Option<InterruptType> {
+        None
     }
 }
 

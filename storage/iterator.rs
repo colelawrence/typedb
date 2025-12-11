@@ -14,9 +14,15 @@ use super::{MVCCKey, MVCCStorage, StorageOperation, MVCC_KEY_INLINE_SIZE};
 use crate::{
     key_range::KeyRange,
     key_value::{StorageKey, StorageKeyReference},
-    keyspace::{iterator::KeyspaceRangeIterator, IteratorPool, KeyspaceError, KeyspaceId},
+    keyspace::{IteratorPool, KeyspaceError, KeyspaceId},
     sequence_number::SequenceNumber,
 };
+
+// Conditional imports for iterator types based on backend
+#[cfg(feature = "rocksdb")]
+use crate::keyspace::iterator::KeyspaceRangeIterator;
+#[cfg(not(feature = "rocksdb"))]
+use crate::keyspace::memory_iterator::MemoryKeyspaceRangeIterator as KeyspaceRangeIterator;
 
 pub(crate) struct MVCCRangeIterator {
     storage_name: Arc<String>,
@@ -34,6 +40,8 @@ impl MVCCRangeIterator {
     // TODO: optimisation for fixed-width keyspaces: we can skip to key[len(key) - 1] = key[len(key) - 1] + 1
     // once we find a successful key, to skip all 'older' versions of the key
     //
+
+    #[cfg(feature = "rocksdb")]
     pub(crate) fn new<D, const PS: usize>(
         storage: &MVCCStorage<D>,
         iterpool: &IteratorPool,
@@ -44,6 +52,29 @@ impl MVCCRangeIterator {
         let keyspace = storage.get_keyspace(range.start().get_value().keyspace_id());
         let mapped_range = range.map(|key| key.as_bytes(), |fixed_width| fixed_width);
         let iterator = keyspace.iterate_range(iterpool, &mapped_range, storage_counters.clone());
+        MVCCRangeIterator {
+            storage_name: storage.name(),
+            keyspace_id: keyspace.id(),
+            iterator: Peekable::new(iterator),
+            open_sequence_number,
+            last_visible_key: None,
+            item: None,
+            storage_counters,
+        }
+    }
+
+    #[cfg(not(feature = "rocksdb"))]
+    pub(crate) fn new<D, const PS: usize>(
+        storage: &MVCCStorage<D>,
+        _iterpool: &IteratorPool,
+        range: &KeyRange<StorageKey<'_, PS>>,
+        open_sequence_number: SequenceNumber,
+        storage_counters: StorageCounters,
+    ) -> Self {
+        let keyspace = storage.get_keyspace(range.start().get_value().keyspace_id());
+        let mapped_range = range.map(|key| key.as_bytes(), |fixed_width| fixed_width);
+        // Memory backend doesn't use iterator pool
+        let iterator = keyspace.iterate_range(&mapped_range, storage_counters.clone());
         MVCCRangeIterator {
             storage_name: storage.name(),
             keyspace_id: keyspace.id(),

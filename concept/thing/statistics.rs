@@ -36,14 +36,17 @@ use resource::{
 use serde::{Deserialize, Serialize};
 use storage::{
     durability_client::{DurabilityClient, DurabilityClientError, DurabilityRecord, UnsequencedDurabilityRecord},
-    isolation_manager::CommitType,
     iterator::MVCCReadError,
     key_value::{StorageKeyArray, StorageKeyReference},
     keyspace::IteratorPool,
-    recovery::commit_recovery::{load_commit_data_from, RecoveryCommitStatus, StorageRecoveryError},
     sequence_number::SequenceNumber,
     snapshot::{buffer::OperationsBuffer, write::Write},
     MVCCStorage,
+};
+#[cfg(feature = "rocksdb")]
+use storage::{
+    isolation_manager::CommitType,
+    recovery::commit_recovery::{load_commit_data_from, RecoveryCommitStatus, StorageRecoveryError},
 };
 use tracing::{event, Level};
 
@@ -125,6 +128,9 @@ impl Statistics {
         }
     }
 
+    /// Synchronise statistics from WAL commit records.
+    /// Only available with the `rocksdb` feature (requires WAL).
+    #[cfg(feature = "rocksdb")]
     pub fn may_synchronise(&mut self, storage: &MVCCStorage<impl DurabilityClient>) -> Result<(), StatisticsError> {
         use StatisticsError::{DataRead, ReloadCommitData};
 
@@ -199,6 +205,14 @@ impl Statistics {
             storage_watermark,
             self.sequence_number
         );
+        Ok(())
+    }
+
+    /// No-op synchronise for memory-only builds (no WAL to replay).
+    #[cfg(not(feature = "rocksdb"))]
+    pub fn may_synchronise(&mut self, storage: &MVCCStorage<impl DurabilityClient>) -> Result<(), StatisticsError> {
+        // Without WAL, there's nothing to synchronise from - statistics are ephemeral
+        self.sequence_number = storage.snapshot_watermark();
         Ok(())
     }
 
@@ -656,10 +670,21 @@ impl fmt::Debug for Statistics {
     }
 }
 
+// Note: The ReloadCommitData variant is only available with the rocksdb feature (requires WAL).
+// The macro doesn't support conditional variants, so we define two separate error types.
+#[cfg(feature = "rocksdb")]
 typedb_error!(
     pub StatisticsError(component = "Statistics", prefix = "STA") {
         DurablyWrite(1, "Error writing statistics summary WAL record.", typedb_source: DurabilityClientError),
         ReloadCommitData(2, "Failed to update statistics due to error reading commit records.", typedb_source: StorageRecoveryError),
+        DataRead(3, "Error updating statistics due error reading MVCC storage layer.", source: MVCCReadError),
+    }
+);
+
+#[cfg(not(feature = "rocksdb"))]
+typedb_error!(
+    pub StatisticsError(component = "Statistics", prefix = "STA") {
+        DurablyWrite(1, "Error writing statistics summary WAL record.", typedb_source: DurabilityClientError),
         DataRead(3, "Error updating statistics due error reading MVCC storage layer.", source: MVCCReadError),
     }
 );

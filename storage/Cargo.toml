@@ -4,8 +4,9 @@
 
 # Note: Features added for WASM compatibility work. Coordinate with Bazel build config.
 [features]
-default = ["rocksdb"]
+default = ["rocksdb", "wal"]
 rocksdb = ["dep:rocksdb"]
+wal = ["durability/wal"]
 memory = []
 
 [package]

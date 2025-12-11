@@ -6,6 +6,7 @@
 
 use std::{fmt, fmt::Formatter};
 
+#[cfg(feature = "rocksdb")]
 pub mod database_importer;
 
 #[derive(Debug, PartialEq, Eq)]

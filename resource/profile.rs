@@ -12,10 +12,12 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc, RwLock,
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use itertools::Itertools;
+
+use crate::time::MaybeInstant;
 
 #[derive(Debug)]
 pub struct TransactionProfile {
@@ -134,7 +136,7 @@ impl CommitProfile {
 
     pub fn start(&mut self) {
         if let Some(data) = &mut self.data {
-            data.stage_start = Instant::now();
+            data.stage_start = MaybeInstant::now();
         }
     }
 
@@ -149,7 +151,7 @@ impl CommitProfile {
             let elapsed = data.stage_start.elapsed();
             data.types_validation = elapsed;
             data.total += elapsed;
-            data.stage_start = Instant::now();
+            data.stage_start = MaybeInstant::now();
         }
     }
 
@@ -158,7 +160,7 @@ impl CommitProfile {
             let elapsed = data.stage_start.elapsed();
             data.things_finalise = elapsed;
             data.total += elapsed;
-            data.stage_start = Instant::now();
+            data.stage_start = MaybeInstant::now();
         }
     }
 
@@ -167,7 +169,7 @@ impl CommitProfile {
             let elapsed = data.stage_start.elapsed();
             data.functions_finalise = elapsed;
             data.total += elapsed;
-            data.stage_start = Instant::now();
+            data.stage_start = MaybeInstant::now();
         }
     }
 
@@ -176,7 +178,7 @@ impl CommitProfile {
             let elapsed = data.stage_start.elapsed();
             data.schema_update_statistics_durable_write = elapsed;
             data.total += elapsed;
-            data.stage_start = Instant::now();
+            data.stage_start = MaybeInstant::now();
         }
     }
 
@@ -185,7 +187,7 @@ impl CommitProfile {
             let elapsed = data.stage_start.elapsed();
             data.snapshot_put_statuses_check = elapsed;
             data.total += elapsed;
-            data.stage_start = Instant::now();
+            data.stage_start = MaybeInstant::now();
         }
     }
 
@@ -194,7 +196,7 @@ impl CommitProfile {
             let elapsed = data.stage_start.elapsed();
             data.snapshot_commit_record_create = elapsed;
             data.total += elapsed;
-            data.stage_start = Instant::now();
+            data.stage_start = MaybeInstant::now();
         }
     }
 
@@ -203,7 +205,7 @@ impl CommitProfile {
             let elapsed = data.stage_start.elapsed();
             data.snapshot_durable_write_data_submit = elapsed;
             data.total += elapsed;
-            data.stage_start = Instant::now();
+            data.stage_start = MaybeInstant::now();
         }
     }
 
@@ -212,7 +214,7 @@ impl CommitProfile {
             let elapsed = data.stage_start.elapsed();
             data.snapshot_isolation_validate = elapsed;
             data.total += elapsed;
-            data.stage_start = Instant::now();
+            data.stage_start = MaybeInstant::now();
         }
     }
 
@@ -221,7 +223,7 @@ impl CommitProfile {
             let elapsed = data.stage_start.elapsed();
             data.snapshot_durable_write_data_confirm = elapsed;
             data.total += elapsed;
-            data.stage_start = Instant::now();
+            data.stage_start = MaybeInstant::now();
         }
     }
 
@@ -230,7 +232,7 @@ impl CommitProfile {
             let elapsed = data.stage_start.elapsed();
             data.snapshot_storage_write = elapsed;
             data.total += elapsed;
-            data.stage_start = Instant::now();
+            data.stage_start = MaybeInstant::now();
         }
     }
 
@@ -239,7 +241,7 @@ impl CommitProfile {
             let elapsed = data.stage_start.elapsed();
             data.snapshot_isolation_manager_notify = elapsed;
             data.total += elapsed;
-            data.stage_start = Instant::now();
+            data.stage_start = MaybeInstant::now();
         }
     }
 
@@ -248,7 +250,7 @@ impl CommitProfile {
             let elapsed = data.stage_start.elapsed();
             data.snapshot_durable_write_commit_status_submit = elapsed;
             data.total += elapsed;
-            data.stage_start = Instant::now();
+            data.stage_start = MaybeInstant::now();
         }
     }
 
@@ -257,7 +259,7 @@ impl CommitProfile {
             let elapsed = data.stage_start.elapsed();
             data.schema_update_caches_update = elapsed;
             data.total += elapsed;
-            data.stage_start = Instant::now();
+            data.stage_start = MaybeInstant::now();
         }
     }
 
@@ -266,7 +268,7 @@ impl CommitProfile {
             let elapsed = data.stage_start.elapsed();
             data.schema_update_statistics_update = elapsed;
             data.total += elapsed;
-            data.stage_start = Instant::now();
+            data.stage_start = MaybeInstant::now();
         }
     }
 
@@ -290,7 +292,7 @@ impl CommitProfile {
 struct CommitProfileData {
     counters: StorageCounters,
     commit_size: usize,
-    stage_start: Instant,
+    stage_start: MaybeInstant,
     types_validation: Duration,
     things_finalise: Duration,
     functions_finalise: Duration,
@@ -312,7 +314,7 @@ impl CommitProfileData {
     fn new() -> Self {
         Self {
             counters: StorageCounters::new_enabled(),
-            stage_start: Instant::now(), // DUMMY
+            stage_start: MaybeInstant::now(), // placeholder until start() is called
             commit_size: 0,
             types_validation: Duration::ZERO,
             things_finalise: Duration::ZERO,
@@ -415,7 +417,7 @@ impl CompileProfile {
         if enabled {
             Self {
                 data: Some(CompileProfileData {
-                    stage_start: Instant::now(), // irrelevant
+                    stage_start: MaybeInstant::now(), // placeholder until start() is called
                     translation: Duration::ZERO,
                     validation: Duration::ZERO,
                     annotation: Duration::ZERO,
@@ -429,35 +431,35 @@ impl CompileProfile {
 
     pub fn start(&mut self) {
         if let Some(data) = &mut self.data {
-            data.stage_start = Instant::now()
+            data.stage_start = MaybeInstant::now()
         }
     }
 
     pub fn translation_finished(&mut self) {
         if let Some(data) = &mut self.data {
             data.translation = data.stage_start.elapsed();
-            data.stage_start = Instant::now();
+            data.stage_start = MaybeInstant::now();
         }
     }
 
     pub fn validation_finished(&mut self) {
         if let Some(data) = &mut self.data {
             data.validation = data.stage_start.elapsed();
-            data.stage_start = Instant::now();
+            data.stage_start = MaybeInstant::now();
         }
     }
 
     pub fn annotation_finished(&mut self) {
         if let Some(data) = &mut self.data {
             data.annotation = data.stage_start.elapsed();
-            data.stage_start = Instant::now();
+            data.stage_start = MaybeInstant::now();
         }
     }
 
     pub fn compilation_finished(&mut self) {
         if let Some(data) = &mut self.data {
             data.compilation = data.stage_start.elapsed();
-            data.stage_start = Instant::now();
+            data.stage_start = MaybeInstant::now();
         }
     }
 
@@ -490,7 +492,7 @@ impl Display for CompileProfile {
 /// This struct is simplified to expect that we execute exactly these steps in a fixed order with no other (significant) operations.
 #[derive(Debug)]
 struct CompileProfileData {
-    stage_start: Instant,
+    stage_start: MaybeInstant,
     translation: Duration,
     validation: Duration,
     annotation: Duration,
@@ -600,7 +602,7 @@ impl StepProfile {
 
     pub fn start_measurement(&self) -> StepProfileMeasurement {
         if self.data.is_some() {
-            StepProfileMeasurement::new(Some(Instant::now()))
+            StepProfileMeasurement::new(Some(MaybeInstant::now()))
         } else {
             StepProfileMeasurement::new(None)
         }
@@ -636,11 +638,11 @@ impl fmt::Display for StepProfileData {
 
 pub struct StepProfileMeasurement {
     // note: we don't store &StepProfile to make callers more flexible with immutable lifetime borrows
-    start: Option<Instant>,
+    start: Option<MaybeInstant>,
 }
 
 impl StepProfileMeasurement {
-    fn new(start: Option<Instant>) -> Self {
+    fn new(start: Option<MaybeInstant>) -> Self {
         Self { start }
     }
 
@@ -648,7 +650,7 @@ impl StepProfileMeasurement {
         match self.start {
             None => {}
             Some(start) => {
-                let end = Instant::now();
+                let end = MaybeInstant::now();
                 let duration = end.duration_since(start).as_nanos() as u64;
                 let profile_data = profile.data.as_ref().unwrap();
                 profile_data.batches.fetch_add(batches, Ordering::Relaxed);

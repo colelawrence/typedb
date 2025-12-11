@@ -24,6 +24,16 @@ use super::{constants, iterator, IteratorPool};
 #[cfg(feature = "rocksdb")]
 use crate::{key_range::KeyRange, write_batches::WriteBatches};
 
+// Memory backend imports (available in all builds, used when rocksdb feature is disabled)
+#[cfg(not(feature = "rocksdb"))]
+use super::backend::KeyValueBackend;
+#[cfg(not(feature = "rocksdb"))]
+use super::memory_backend::{MemoryBackend, MemoryWriteBatch};
+#[cfg(not(feature = "rocksdb"))]
+use super::memory_iterator::MemoryKeyspaceRangeIterator;
+#[cfg(not(feature = "rocksdb"))]
+use crate::key_range::KeyRange;
+
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct KeyspaceId(pub u8);
 
@@ -339,6 +349,210 @@ impl Keyspace {
 impl fmt::Debug for Keyspace {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Keyspace[name={}, path={:?}, id={}]", self.name, self.path, self.id)
+    }
+}
+
+// ============================================================================
+// Memory-Backend Keyspaces (feature != "rocksdb")
+// ============================================================================
+
+#[cfg(not(feature = "rocksdb"))]
+#[derive(Debug)]
+pub struct Keyspaces {
+    keyspaces: Vec<Keyspace>,
+    index: [Option<KeyspaceId>; KEYSPACE_MAXIMUM_COUNT],
+}
+
+#[cfg(not(feature = "rocksdb"))]
+impl Keyspaces {
+    pub(crate) fn new() -> Self {
+        Self { keyspaces: Vec::new(), index: std::array::from_fn(|_| None) }
+    }
+
+    pub(crate) fn open<KS: KeyspaceSet>(_storage_dir: impl AsRef<Path>) -> Result<Self, KeyspaceOpenError> {
+        // Memory backend ignores storage_dir - it's purely in-memory
+        let mut keyspaces = Keyspaces::new();
+        for keyspace in KS::iter() {
+            keyspaces
+                .validate_new_keyspace(keyspace)
+                .map_err(|error| KeyspaceOpenError::Validation { source: error })?;
+            keyspaces.keyspaces.push(Keyspace::new(keyspace));
+            keyspaces.index[keyspace.id().0 as usize] = Some(KeyspaceId(keyspaces.keyspaces.len() as u8 - 1));
+        }
+        Ok(keyspaces)
+    }
+
+    fn validate_new_keyspace(&self, keyspace_id: impl KeyspaceSet) -> Result<(), KeyspaceValidationError> {
+        use KeyspaceValidationError::{IdExists, IdReserved, IdTooLarge, NameExists};
+
+        let name = keyspace_id.name();
+
+        if keyspace_id.id() == KEYSPACE_ID_RESERVED_UNSET {
+            return Err(IdReserved { name, id: keyspace_id.id().0 });
+        }
+
+        if keyspace_id.id() > KEYSPACE_ID_MAX {
+            return Err(IdTooLarge { name, id: keyspace_id.id().0, max_id: KEYSPACE_ID_MAX.0 });
+        }
+
+        for (existing_id, existing_keyspace_index) in self.index.iter().enumerate() {
+            if let Some(existing_index) = existing_keyspace_index {
+                let keyspace = &self.keyspaces[existing_index.0 as usize];
+                if keyspace.name() == name {
+                    return Err(NameExists { name });
+                }
+                if existing_id == keyspace_id.id().0 as usize {
+                    return Err(IdExists { new_name: name, id: keyspace_id.id().0, existing_name: keyspace.name() });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn get(&self, keyspace_id: KeyspaceId) -> &Keyspace {
+        let keyspace_index = self.index[keyspace_id.0 as usize].unwrap();
+        &self.keyspaces[keyspace_index.0 as usize]
+    }
+
+    pub(crate) fn get_mut(&mut self, keyspace_id: KeyspaceId) -> &mut Keyspace {
+        let keyspace_index = self.index[keyspace_id.0 as usize].unwrap();
+        &mut self.keyspaces[keyspace_index.0 as usize]
+    }
+
+    pub(crate) fn write(&self, write_batches: crate::write_batches::WriteBatches) -> Result<(), KeyspaceError> {
+        for (index, write_batch) in write_batches.into_iter() {
+            debug_assert!(index < KEYSPACE_MAXIMUM_COUNT);
+            self.get(KeyspaceId(index as u8)).write(write_batch)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn checkpoint(&self, _current_checkpoint_dir: &Path) -> Result<(), KeyspaceCheckpointError> {
+        // No-op for memory backend - no persistence
+        Ok(())
+    }
+
+    pub(crate) fn delete(self) -> Result<(), Vec<KeyspaceDeleteError>> {
+        // Memory backend: just drop - no filesystem cleanup needed
+        Ok(())
+    }
+
+    pub(crate) fn reset(&mut self) -> Result<(), KeyspaceError> {
+        for keyspace in self.keyspaces.iter_mut() {
+            keyspace.reset()?
+        }
+        Ok(())
+    }
+
+    pub fn estimate_size_in_bytes(&self) -> Result<u64, KeyspaceError> {
+        self.keyspaces.iter().try_fold(0, |total, keyspace| {
+            let size = keyspace.estimate_size_in_bytes()?;
+            Ok(total + size)
+        })
+    }
+
+    pub fn estimate_key_count(&self) -> Result<u64, KeyspaceError> {
+        self.keyspaces.iter().try_fold(0, |total, keyspace| {
+            let count = keyspace.estimate_key_count()?;
+            Ok(total + count)
+        })
+    }
+}
+
+// ============================================================================
+// Memory-Backend Keyspace (feature != "rocksdb")
+// ============================================================================
+
+/// In-memory key-value store backed by `MemoryBackend`.
+#[cfg(not(feature = "rocksdb"))]
+pub(crate) struct Keyspace {
+    backend: MemoryBackend,
+    name: &'static str,
+    id: KeyspaceId,
+    prefix_length: Option<usize>,
+}
+
+#[cfg(not(feature = "rocksdb"))]
+impl Keyspace {
+    fn new(keyspace: impl KeyspaceSet) -> Self {
+        Self {
+            backend: MemoryBackend::new(keyspace.name()),
+            name: keyspace.name(),
+            id: keyspace.id(),
+            prefix_length: keyspace.prefix_length(),
+        }
+    }
+
+    pub(crate) fn id(&self) -> KeyspaceId {
+        self.id
+    }
+
+    pub(crate) fn name(&self) -> &'static str {
+        self.name
+    }
+
+    pub(crate) fn prefix_length(&self) -> Option<usize> {
+        self.prefix_length.clone()
+    }
+
+    pub(crate) fn put(&self, key: &[u8], value: &[u8]) -> Result<(), KeyspaceError> {
+        self.backend.put(key, value).map_err(|error| KeyspaceError::put(self.name, error))
+    }
+
+    pub(crate) fn get<M, V>(&self, key: &[u8], mapper: M) -> Result<Option<V>, KeyspaceError>
+    where
+        M: FnOnce(&[u8]) -> V,
+    {
+        self.backend.get(key, mapper).map_err(|error| KeyspaceError::get(self.name, error))
+    }
+
+    pub(crate) fn get_prev<M, T>(&self, key: &[u8], mapper: M) -> Option<T>
+    where
+        M: FnOnce(&[u8], &[u8]) -> T,
+    {
+        self.backend.get_prev(key, mapper)
+    }
+
+    pub(crate) fn iterate_range<const PREFIX_INLINE_SIZE: usize>(
+        &self,
+        range: &KeyRange<bytes::Bytes<'_, PREFIX_INLINE_SIZE>>,
+        storage_counters: StorageCounters,
+    ) -> MemoryKeyspaceRangeIterator {
+        let iterator = self.backend.create_iterator(range.start().get_value().as_ref(), storage_counters);
+        MemoryKeyspaceRangeIterator::new(self.name, self.prefix_length, iterator, range)
+    }
+
+    pub(crate) fn write(&self, write_batch: MemoryWriteBatch) -> Result<(), KeyspaceError> {
+        self.backend.write_batch(write_batch).map_err(|error| KeyspaceError::batch_write(self.name, error))
+    }
+
+    pub(crate) fn checkpoint(&self, _checkpoint_dir: &Path) -> Result<(), KeyspaceCheckpointError> {
+        // No-op for memory backend
+        Ok(())
+    }
+
+    pub(crate) fn delete(self) -> Result<(), KeyspaceDeleteError> {
+        // Memory backend: just drop
+        Ok(())
+    }
+
+    pub(crate) fn reset(&mut self) -> Result<(), KeyspaceError> {
+        self.backend.reset().map_err(|err| KeyspaceError::iterate(self.name, err))
+    }
+
+    pub fn estimate_size_in_bytes(&self) -> Result<u64, KeyspaceError> {
+        self.backend.estimate_size_bytes().map_err(|err| KeyspaceError::property("estimate_size_bytes", err))
+    }
+
+    pub fn estimate_key_count(&self) -> Result<u64, KeyspaceError> {
+        self.backend.estimate_key_count().map_err(|err| KeyspaceError::property("estimate_key_count", err))
+    }
+}
+
+#[cfg(not(feature = "rocksdb"))]
+impl fmt::Debug for Keyspace {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Keyspace[name={}, id={}, memory]", self.name, self.id)
     }
 }
 

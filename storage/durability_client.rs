@@ -9,10 +9,14 @@ use std::{
     sync::{mpsc, Arc},
 };
 
-use durability::{wal::WAL, DurabilityRecordType, DurabilityService, DurabilityServiceError, RawRecord};
+use durability::{DurabilityRecordType, DurabilityServiceError, RawRecord};
 use error::typedb_error;
-use itertools::Itertools;
+#[cfg(feature = "wal")]
 use resource::constants::storage::COMMIT_WAIT_FOR_FSYNC;
+#[cfg(feature = "wal")]
+use durability::{wal::WAL, DurabilityService};
+#[cfg(not(feature = "wal"))]
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::sequence_number::SequenceNumber;
 
@@ -82,7 +86,7 @@ pub trait DurabilityClient {
         &self,
         sequence_number: SequenceNumber,
     ) -> Result<impl Iterator<Item = Result<Record, DurabilityClientError>>, DurabilityClientError> {
-        Ok(self.iter_type_from::<Record>(sequence_number)?.map_ok(|(_, record)| record))
+        Ok(self.iter_type_from::<Record>(sequence_number)?.map(|result| result.map(|(_, record)| record)))
     }
 
     fn iter_unsequenced_type_from_start<Record: UnsequencedDurabilityRecord>(
@@ -100,11 +104,17 @@ pub trait DurabilityClient {
     fn reset(&mut self) -> Result<(), DurabilityClientError>;
 }
 
+// ============================================================================
+// WALClient - Available only with `wal` feature
+// ============================================================================
+
+#[cfg(feature = "wal")]
 #[derive(Debug)]
 pub struct WALClient {
     wal: WAL,
 }
 
+#[cfg(feature = "wal")]
 impl WALClient {
     pub fn new(wal: WAL) -> Self {
         Self { wal }
@@ -122,6 +132,7 @@ impl WALClient {
     }
 }
 
+#[cfg(feature = "wal")]
 impl DurabilityClient for WALClient {
     fn request_sync(&self) -> mpsc::Receiver<()> {
         self.wal.request_sync(COMMIT_WAIT_FOR_FSYNC)
@@ -207,6 +218,103 @@ impl DurabilityClient for WALClient {
 
     fn reset(&mut self) -> Result<(), DurabilityClientError> {
         self.wal.reset().map_err(|err| DurabilityClientError::ServiceError { source: err })
+    }
+}
+
+// ============================================================================
+// NoopDurabilityClient - Available only without `wal` feature
+// ============================================================================
+
+/// In-memory durability client for WASM builds.
+/// Does not persist anything - all data is ephemeral.
+#[cfg(not(feature = "wal"))]
+#[derive(Debug)]
+pub struct NoopDurabilityClient {
+    next_sequence_number: AtomicU64,
+}
+
+#[cfg(not(feature = "wal"))]
+impl Default for NoopDurabilityClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(not(feature = "wal"))]
+impl NoopDurabilityClient {
+    pub fn new() -> Self {
+        Self { next_sequence_number: AtomicU64::new(1) }
+    }
+
+    pub fn with_sequence_number(start: SequenceNumber) -> Self {
+        Self { next_sequence_number: AtomicU64::new(start.number()) }
+    }
+}
+
+#[cfg(not(feature = "wal"))]
+impl DurabilityClient for NoopDurabilityClient {
+    fn register_record_type<Record: DurabilityRecord>(&mut self) {
+        // No-op: nothing to register
+    }
+
+    fn current(&self) -> SequenceNumber {
+        SequenceNumber::new(self.next_sequence_number.load(Ordering::SeqCst))
+    }
+
+    fn previous(&self) -> SequenceNumber {
+        self.current().previous()
+    }
+
+    fn sequenced_write<Record>(&self, _record: &Record) -> Result<SequenceNumber, DurabilityClientError>
+    where
+        Record: SequencedDurabilityRecord,
+    {
+        let seq = self.next_sequence_number.fetch_add(1, Ordering::SeqCst);
+        Ok(SequenceNumber::new(seq))
+    }
+
+    fn unsequenced_write<Record>(&self, _record: &Record) -> Result<(), DurabilityClientError>
+    where
+        Record: UnsequencedDurabilityRecord,
+    {
+        Ok(())
+    }
+
+    fn request_sync(&self) -> mpsc::Receiver<()> {
+        let (tx, rx) = mpsc::channel();
+        // Send immediately - sync is "instant" for in-memory
+        let _ = tx.send(());
+        rx
+    }
+
+    fn iter_from(
+        &self,
+        _sequence_number: SequenceNumber,
+    ) -> Result<impl Iterator<Item = Result<RawRecord<'static>, DurabilityClientError>>, DurabilityClientError> {
+        Ok(std::iter::empty())
+    }
+
+    fn iter_type_from<Record: DurabilityRecord>(
+        &self,
+        _sequence_number: SequenceNumber,
+    ) -> Result<impl Iterator<Item = Result<(SequenceNumber, Record), DurabilityClientError>>, DurabilityClientError>
+    {
+        Ok(std::iter::empty())
+    }
+
+    fn find_last_unsequenced_type<Record: UnsequencedDurabilityRecord>(
+        &self,
+    ) -> Result<Option<Record>, DurabilityClientError> {
+        Ok(None)
+    }
+
+    fn delete_durability(self) -> Result<(), DurabilityClientError> {
+        Ok(())
+    }
+
+    fn reset(&mut self) -> Result<(), DurabilityClientError> {
+        self.next_sequence_number.store(1, Ordering::SeqCst);
+        Ok(())
     }
 }
 

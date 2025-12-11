@@ -7,7 +7,10 @@
 #![deny(elided_lifetimes_in_paths)]
 #![deny(unused_must_use)]
 
-use bytes::{util::MB, Bytes};
+#[cfg(feature = "rocksdb")]
+use bytes::util::MB;
+use bytes::Bytes;
+#[cfg(feature = "rocksdb")]
 use rocksdb::{BlockBasedIndexType, BlockBasedOptions, DBCompressionType, SliceTransform};
 use storage::{
     key_value::StorageKey,
@@ -87,6 +90,7 @@ impl KeyspaceSet for EncodingKeyspace {
         }
     }
 
+    #[cfg(feature = "rocksdb")]
     fn rocks_configuration(&self, cache: &rocksdb::Cache) -> rocksdb::Options {
         let mut options = rocksdb::Options::default();
 

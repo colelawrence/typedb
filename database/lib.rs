@@ -10,7 +10,9 @@
 pub use self::database::{Database, DatabaseDeleteError, DatabaseOpenError, DatabaseResetError};
 
 pub mod database;
+#[cfg(feature = "rocksdb")]
 pub mod database_manager;
 pub mod migration;
+#[cfg(feature = "rocksdb")]
 pub mod query;
 pub mod transaction;

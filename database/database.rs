@@ -13,8 +13,10 @@ use std::{
         mpsc::{sync_channel, SyncSender},
         Arc, Mutex, MutexGuard, RwLock, TryLockError,
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
+
+use resource::time::MaybeInstant;
 
 use concept::{
     thing::statistics::{Statistics, StatisticsError},
@@ -23,8 +25,11 @@ use concept::{
         TypeManager,
     },
 };
+#[cfg(feature = "rocksdb")]
 use concurrency::IntervalRunner;
+#[cfg(feature = "rocksdb")]
 use diagnostics::metrics::{DataLoadMetrics, DatabaseMetrics, SchemaLoadMetrics};
+#[cfg(feature = "rocksdb")]
 use durability::{wal::WAL, DurabilityServiceError};
 use encoding::{
     error::EncodingError,
@@ -37,17 +42,23 @@ use encoding::{
 use error::typedb_error;
 use function::{function_cache::FunctionCache, FunctionError};
 use query::query_cache::QueryCache;
+#[cfg(feature = "rocksdb")]
 use resource::constants::database::{CHECKPOINT_INTERVAL, STATISTICS_UPDATE_INTERVAL};
 use storage::{
-    durability_client::{DurabilityClient, DurabilityClientError, WALClient},
-    recovery::checkpoint::{Checkpoint, CheckpointCreateError, CheckpointLoadError},
+    durability_client::{DurabilityClient, DurabilityClientError},
     sequence_number::SequenceNumber,
     MVCCStorage, StorageDeleteError, StorageOpenError, StorageResetError,
 };
+#[cfg(feature = "rocksdb")]
+use storage::{
+    durability_client::WALClient,
+    recovery::checkpoint::{Checkpoint, CheckpointCreateError, CheckpointLoadError},
+};
 use tracing::{event, Level};
 
+use crate::transaction::TransactionError;
+#[cfg(feature = "rocksdb")]
 use crate::{
-    transaction::TransactionError,
     DatabaseOpenError::FunctionCacheInitialise,
     DatabaseResetError::{
         CorruptionPartialResetKeyGeneratorInUse, CorruptionPartialResetThingVertexGeneratorInUse,
@@ -64,6 +75,9 @@ pub(super) struct Schema {
 
 type SchemaWriteTransactionState = (bool, usize, VecDeque<TransactionReservationRequest>);
 
+/// Database with RocksDB backend (persistent storage with WAL).
+/// Includes background tasks for statistics updates and checkpointing.
+#[cfg(feature = "rocksdb")]
 pub struct Database<D> {
     name: String,
     pub(super) path: PathBuf,
@@ -77,6 +91,22 @@ pub struct Database<D> {
     schema_write_transaction_exclusivity: Mutex<SchemaWriteTransactionState>,
     _statistics_updater: IntervalRunner,
     _checkpointer: IntervalRunner,
+}
+
+/// Database with in-memory backend (ephemeral storage, no WAL).
+/// No background tasks - statistics and checkpointing are not applicable.
+#[cfg(not(feature = "rocksdb"))]
+pub struct Database<D> {
+    name: String,
+    pub(super) path: PathBuf,
+    pub(super) storage: Arc<MVCCStorage<D>>,
+    pub(super) definition_key_generator: Arc<DefinitionKeyGenerator>,
+    pub(super) type_vertex_generator: Arc<TypeVertexGenerator>,
+    pub(super) thing_vertex_generator: Arc<ThingVertexGenerator>,
+
+    pub(super) schema: Arc<RwLock<Schema>>,
+    pub(super) query_cache: Arc<QueryCache>,
+    schema_write_transaction_exclusivity: Mutex<SchemaWriteTransactionState>,
 }
 
 enum TransactionReservationRequest {
@@ -155,7 +185,7 @@ impl<D> Database<D> {
         &self,
         timeout: Duration,
     ) -> Result<(MutexGuard<'_, SchemaWriteTransactionState>, Duration), TransactionError> {
-        let start_time = Instant::now();
+        let start_time = MaybeInstant::now();
         let guard = loop {
             match self.schema_write_transaction_exclusivity.try_lock() {
                 Ok(guard) => break guard,
@@ -222,6 +252,7 @@ impl<D> Database<D> {
     }
 }
 
+#[cfg(feature = "rocksdb")]
 impl Database<WALClient> {
     pub fn open(path: &Path) -> Result<Database<WALClient>, DatabaseOpenError> {
         use DatabaseOpenError::InvalidUnicodeName;
@@ -487,6 +518,7 @@ impl Database<WALClient> {
     }
 }
 
+#[cfg(feature = "rocksdb")]
 fn make_checkpoint_fn(
     path: PathBuf,
     mut prev_checkpoint: SequenceNumber,
@@ -503,6 +535,7 @@ fn make_checkpoint_fn(
     }
 }
 
+#[cfg(feature = "rocksdb")]
 fn make_update_statistics_fn(
     storage: Arc<MVCCStorage<WALClient>>,
     schema: Arc<RwLock<Schema>>,
@@ -520,6 +553,68 @@ fn make_update_statistics_fn(
     }
 }
 
+// ============================================================================
+// In-memory Database (for WASM/memory backend)
+// ============================================================================
+
+#[cfg(feature = "memory")]
+use storage::durability_client::NoopDurabilityClient;
+
+#[cfg(feature = "memory")]
+impl Database<NoopDurabilityClient> {
+    /// Create a new in-memory database (ephemeral storage, no persistence).
+    /// This is intended for WASM builds and testing scenarios.
+    pub fn create_in_memory(name: impl AsRef<str>) -> Result<Database<NoopDurabilityClient>, DatabaseOpenError> {
+        use DatabaseOpenError::{Encoding, FunctionCacheInitialise, StorageOpen, TypeCacheInitialise};
+
+        let name = name.as_ref();
+        // Use a placeholder path - the memory backend doesn't actually use the filesystem
+        let path = PathBuf::from(format!("/memory/{}", name));
+
+        let durability_client = NoopDurabilityClient::new();
+
+        let storage = Arc::new(
+            MVCCStorage::create::<EncodingKeyspace>(name, &path, durability_client)
+                .map_err(|error| StorageOpen { typedb_source: error })?,
+        );
+        let definition_key_generator = Arc::new(DefinitionKeyGenerator::new());
+        let type_vertex_generator = Arc::new(TypeVertexGenerator::new());
+        let thing_vertex_generator =
+            Arc::new(ThingVertexGenerator::load(storage.clone()).map_err(|err| Encoding { source: err })?);
+        let thing_statistics = Arc::new(Statistics::new(storage.snapshot_watermark()));
+
+        let type_cache = Arc::new(
+            TypeCache::new(storage.clone(), SequenceNumber::MIN)
+                .map_err(|error| TypeCacheInitialise { typedb_source: error })?,
+        );
+
+        let function_cache = Arc::new(
+            FunctionCache::new(
+                storage.clone(),
+                &TypeManager::new(definition_key_generator.clone(), type_vertex_generator.clone(), None),
+                SequenceNumber::MIN,
+            )
+            .map_err(|error| FunctionCacheInitialise { typedb_source: error })?,
+        );
+
+        let schema = Arc::new(RwLock::new(Schema { thing_statistics, type_cache, function_cache }));
+        let query_cache = Arc::new(QueryCache::new());
+
+        Ok(Database::<NoopDurabilityClient> {
+            name: name.to_owned(),
+            path,
+            storage,
+            definition_key_generator,
+            type_vertex_generator,
+            thing_vertex_generator,
+            schema,
+            query_cache,
+            schema_write_transaction_exclusivity: Mutex::new((false, 0, VecDeque::with_capacity(100))),
+        })
+    }
+}
+
+#[cfg(feature = "rocksdb")]
 typedb_error! {
     pub DatabaseOpenError(component = "Database open", prefix = "DBO") {
         InvalidUnicodeName(1, "Could not open database: invalid unicode name '{name:?}'.", name: OsString),
@@ -531,6 +626,24 @@ typedb_error! {
         DurabilityClientRead(7, "Error reading from durability client.", typedb_source: DurabilityClientError),
         CheckpointLoad(8, "Error loading checkpoint for database '{name}'.", name: String, typedb_source: CheckpointLoadError),
         CheckpointCreate(9, "Error creating checkpoint for database '{name}'.", name: String, source: CheckpointCreateError),
+        Encoding(10, "Data encoding error.", source: EncodingError),
+        StatisticsInitialise(11, "Error initialising statistics manager.", typedb_source: StatisticsError),
+        TypeCacheInitialise(12, "Error initialising type cache.", typedb_source: TypeCacheCreateError),
+        FunctionCacheInitialise(13, "Error initialising function cache.", typedb_source: FunctionError),
+        FileDelete(14, "Error while deleting file for '{name}'", name: String, source: Arc<io::Error>),
+        DirectoryDelete(15, "Error while deleting directory of '{name}'", name: String, source: Arc<io::Error>),
+    }
+}
+
+#[cfg(not(feature = "rocksdb"))]
+typedb_error! {
+    pub DatabaseOpenError(component = "Database open", prefix = "DBO") {
+        InvalidUnicodeName(1, "Could not open database: invalid unicode name '{name:?}'.", name: OsString),
+        DirectoryRead(2, "Error while reading directory for '{name}'.", name: String, source: Arc<io::Error>),
+        DirectoryCreate(3, "Error creating directory for '{name}'", name: String, source: Arc<io::Error>),
+        StorageOpen(4, "Error opening storage layer.", typedb_source: StorageOpenError),
+        DurabilityClientOpen(6, "Error opening durability client.", typedb_source:DurabilityClientError),
+        DurabilityClientRead(7, "Error reading from durability client.", typedb_source: DurabilityClientError),
         Encoding(10, "Data encoding error.", source: EncodingError),
         StatisticsInitialise(11, "Error initialising statistics manager.", typedb_source: StatisticsError),
         TypeCacheInitialise(12, "Error initialising type cache.", typedb_source: TypeCacheCreateError),
