@@ -37,7 +37,7 @@ use crate::{
     type_::{
         annotation::{
             Annotation, AnnotationAbstract, AnnotationCardinality, AnnotationCascade, AnnotationCategory,
-            AnnotationDistinct, AnnotationIndependent, AnnotationKey, AnnotationRange, AnnotationRegex,
+            AnnotationDistinct, AnnotationDoc, AnnotationIndependent, AnnotationKey, AnnotationRange, AnnotationRegex,
             AnnotationUnique, AnnotationValues,
         },
         attribute_type::{AttributeType, AttributeTypeAnnotation},
@@ -305,6 +305,7 @@ macro_rules! storage_save_annotation {
         match $annotation {
             Annotation::Abstract(_) => $save_func($snapshot, $type_, None::<AnnotationAbstract>),
             Annotation::Distinct(_) => $save_func($snapshot, $type_, None::<AnnotationDistinct>),
+            Annotation::Doc(doc) => $save_func($snapshot, $type_, Some(doc)),
             Annotation::Independent(_) => $save_func($snapshot, $type_, None::<AnnotationIndependent>),
             Annotation::Unique(_) => $save_func($snapshot, $type_, None::<AnnotationUnique>),
             Annotation::Key(_) => $save_func($snapshot, $type_, None::<AnnotationKey>),
@@ -329,6 +330,7 @@ macro_rules! storage_delete_annotation {
             match $annotation_category {
                 AnnotationCategory::Abstract => TypeWriter::$delete_func::<AnnotationAbstract>($snapshot, $type_),
                 AnnotationCategory::Distinct => TypeWriter::$delete_func::<AnnotationDistinct>($snapshot, $type_),
+                AnnotationCategory::Doc => TypeWriter::$delete_func::<AnnotationDoc>($snapshot, $type_),
                 AnnotationCategory::Independent => TypeWriter::$delete_func::<AnnotationIndependent>($snapshot, $type_),
                 AnnotationCategory::Unique => TypeWriter::$delete_func::<AnnotationUnique>($snapshot, $type_),
                 AnnotationCategory::Key => TypeWriter::$delete_func::<AnnotationKey>($snapshot, $type_),

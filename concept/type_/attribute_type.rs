@@ -34,7 +34,7 @@ use crate::{
     thing::{attribute::Attribute, thing_manager::ThingManager},
     type_::{
         annotation::{
-            Annotation, AnnotationAbstract, AnnotationCategory, AnnotationError, AnnotationIndependent,
+            Annotation, AnnotationAbstract, AnnotationCategory, AnnotationDoc, AnnotationError, AnnotationIndependent,
             AnnotationRange, AnnotationRegex, AnnotationValues, DefaultFrom,
         },
         constraint::{CapabilityConstraint, TypeConstraint},
@@ -406,6 +406,7 @@ impl AttributeType {
             AttributeTypeAnnotation::Values(values) => {
                 type_manager.set_annotation_values(snapshot, thing_manager, *self, values, storage_counters)?
             }
+            AttributeTypeAnnotation::Doc(_) => {}
         };
         Ok(())
     }
@@ -426,6 +427,7 @@ impl AttributeType {
             AttributeTypeAnnotation::Regex(_) => type_manager.unset_annotation_regex(snapshot, *self)?,
             AttributeTypeAnnotation::Range(_) => type_manager.unset_annotation_range(snapshot, *self)?,
             AttributeTypeAnnotation::Values(_) => type_manager.unset_annotation_values(snapshot, *self)?,
+            AttributeTypeAnnotation::Doc(_) => {}
         }
         Ok(())
     }
@@ -479,6 +481,7 @@ pub enum AttributeTypeAnnotation {
     Regex(AnnotationRegex),
     Range(AnnotationRange),
     Values(AnnotationValues),
+    Doc(AnnotationDoc),
 }
 
 impl AttributeTypeAnnotation {
@@ -499,7 +502,8 @@ impl AttributeTypeAnnotation {
             | AnnotationCategory::Unique
             | AnnotationCategory::Key
             | AnnotationCategory::Cardinality
-            | AnnotationCategory::Cascade => false,
+            | AnnotationCategory::Cascade
+            | AnnotationCategory::Doc => false,
         }
     }
 }
@@ -514,6 +518,7 @@ impl TryFrom<Annotation> for AttributeTypeAnnotation {
             Annotation::Regex(annotation) => Ok(AttributeTypeAnnotation::Regex(annotation)),
             Annotation::Range(annotation) => Ok(AttributeTypeAnnotation::Range(annotation)),
             Annotation::Values(annotation) => Ok(AttributeTypeAnnotation::Values(annotation)),
+            Annotation::Doc(annotation) => Ok(AttributeTypeAnnotation::Doc(annotation)),
 
             | Annotation::Distinct(_)
             | Annotation::Unique(_)
@@ -534,6 +539,7 @@ impl From<AttributeTypeAnnotation> for Annotation {
             AttributeTypeAnnotation::Regex(annotation) => Annotation::Regex(annotation),
             AttributeTypeAnnotation::Range(annotation) => Annotation::Range(annotation),
             AttributeTypeAnnotation::Values(annotation) => Annotation::Values(annotation),
+            AttributeTypeAnnotation::Doc(annotation) => Annotation::Doc(annotation),
         }
     }
 }

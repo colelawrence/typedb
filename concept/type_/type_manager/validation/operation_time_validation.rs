@@ -2525,7 +2525,9 @@ impl OperationTimeValidation {
                     )?;
                     Self::validate_values_arguments(values.clone(), value_type.clone())?
                 }
-                | AttributeTypeAnnotation::Abstract(_) | AttributeTypeAnnotation::Independent(_) => {}
+                | AttributeTypeAnnotation::Abstract(_)
+                | AttributeTypeAnnotation::Independent(_)
+                | AttributeTypeAnnotation::Doc(_) => {}
             }
         }
 

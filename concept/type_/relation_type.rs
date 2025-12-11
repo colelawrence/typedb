@@ -34,7 +34,8 @@ use crate::{
     thing::{relation::Relation, thing_manager::ThingManager},
     type_::{
         annotation::{
-            Annotation, AnnotationAbstract, AnnotationCascade, AnnotationCategory, AnnotationError, DefaultFrom,
+            Annotation, AnnotationAbstract, AnnotationCascade, AnnotationCategory, AnnotationDoc, AnnotationError,
+            DefaultFrom,
         },
         attribute_type::AttributeType,
         constraint::{CapabilityConstraint, Constraint, TypeConstraint},
@@ -263,6 +264,7 @@ impl RelationType {
             RelationTypeAnnotation::Cascade(_) => {
                 type_manager.set_annotation_cascade(snapshot, thing_manager, *self)?
             }
+            RelationTypeAnnotation::Doc(_) => {}
         };
         Ok(())
     }
@@ -280,6 +282,7 @@ impl RelationType {
                 type_manager.unset_relation_type_annotation_abstract(snapshot, *self)?
             }
             RelationTypeAnnotation::Cascade(_) => type_manager.unset_annotation_cascade(snapshot, *self)?,
+            RelationTypeAnnotation::Doc(_) => {}
         }
         Ok(())
     }
@@ -872,10 +875,11 @@ impl PlayerAPI for RelationType {
     }
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum RelationTypeAnnotation {
     Abstract(AnnotationAbstract),
     Cascade(AnnotationCascade),
+    Doc(AnnotationDoc),
 }
 
 impl TryFrom<Annotation> for RelationTypeAnnotation {
@@ -884,6 +888,7 @@ impl TryFrom<Annotation> for RelationTypeAnnotation {
         match annotation {
             Annotation::Abstract(annotation) => Ok(RelationTypeAnnotation::Abstract(annotation)),
             Annotation::Cascade(annotation) => Ok(RelationTypeAnnotation::Cascade(annotation)),
+            Annotation::Doc(annotation) => Ok(RelationTypeAnnotation::Doc(annotation)),
 
             | Annotation::Distinct(_)
             | Annotation::Independent(_)
@@ -904,6 +909,7 @@ impl From<RelationTypeAnnotation> for Annotation {
         match anno {
             RelationTypeAnnotation::Abstract(annotation) => Annotation::Abstract(annotation),
             RelationTypeAnnotation::Cascade(annotation) => Annotation::Cascade(annotation),
+            RelationTypeAnnotation::Doc(annotation) => Annotation::Doc(annotation),
         }
     }
 }

@@ -6,7 +6,8 @@
 
 use concept::type_::annotation::{
     Annotation, AnnotationAbstract, AnnotationCardinality, AnnotationCascade, AnnotationCategory, AnnotationDistinct,
-    AnnotationIndependent, AnnotationKey, AnnotationRange, AnnotationRegex, AnnotationUnique, AnnotationValues,
+    AnnotationDoc, AnnotationIndependent, AnnotationKey, AnnotationRange, AnnotationRegex, AnnotationUnique,
+    AnnotationValues,
 };
 use encoding::{graph::type_::Kind, value::value_type::ValueType};
 use typeql::{
@@ -36,7 +37,16 @@ pub fn translate_annotation(typeql_kind: &typeql::Annotation) -> Result<Annotati
         }
         typeql::Annotation::Cascade(_) => Annotation::Cascade(AnnotationCascade),
         typeql::Annotation::Distinct(_) => Annotation::Distinct(AnnotationDistinct),
-
+        typeql::Annotation::Doc(doc) => {
+            let description = doc.description.as_ref().map(|s| s.value.clone());
+            let mut metadata = std::collections::BTreeMap::new();
+            for (ident, literal) in &doc.kwargs {
+                let key = ident.as_str_unchecked().to_string();
+                let value = translate_literal(literal)?;
+                metadata.insert(key, value);
+            }
+            Annotation::Doc(AnnotationDoc::new(description, metadata))
+        }
         typeql::Annotation::Independent(_) => Annotation::Independent(AnnotationIndependent),
         typeql::Annotation::Key(_) => Annotation::Key(AnnotationKey),
         typeql::Annotation::Range(range) => Annotation::Range(AnnotationRange::new(
@@ -66,6 +76,7 @@ pub fn translate_annotation_category(
         token::Annotation::Cardinality => AnnotationCategory::Cardinality,
         token::Annotation::Cascade => AnnotationCategory::Cascade,
         token::Annotation::Distinct => AnnotationCategory::Distinct,
+        token::Annotation::Doc => AnnotationCategory::Doc,
         token::Annotation::Independent => AnnotationCategory::Independent,
         token::Annotation::Key => AnnotationCategory::Key,
         token::Annotation::Range => AnnotationCategory::Range,

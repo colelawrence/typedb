@@ -31,6 +31,7 @@ pub enum Infix {
 
     PropertyAnnotationAbstract,
     PropertyAnnotationDistinct,
+    PropertyAnnotationDoc,
     PropertyAnnotationIndependent,
     PropertyAnnotationUnique,
     PropertyAnnotationKey,
@@ -84,6 +85,7 @@ impl Infix {
        // Reserve: range 50 - 99 to store annotations with a value type - see InfixID::<CONSTANTS>
         PropertyAnnotationAbstract => [50];
         PropertyAnnotationDistinct => [51];
+        PropertyAnnotationDoc => [60];
         PropertyAnnotationIndependent => [52];
         PropertyAnnotationUnique => [53];
         PropertyAnnotationKey => [54];

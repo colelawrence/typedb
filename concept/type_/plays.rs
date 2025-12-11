@@ -192,7 +192,8 @@ impl TryFrom<Annotation> for PlaysAnnotation {
             | Annotation::Regex(_)
             | Annotation::Cascade(_)
             | Annotation::Range(_)
-            | Annotation::Values(_) => {
+            | Annotation::Values(_)
+            | Annotation::Doc(_) => {
                 Err(AnnotationError::UnsupportedAnnotationForPlays { category: annotation.category() })
             }
         }
@@ -228,6 +229,7 @@ impl PartialEq<Annotation> for PlaysAnnotation {
             Annotation::Cascade(_) => false,
             Annotation::Range(_) => false,
             Annotation::Values(_) => false,
+            Annotation::Doc(_) => false,
         }
     }
 }

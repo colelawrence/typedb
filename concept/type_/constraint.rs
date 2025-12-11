@@ -113,7 +113,7 @@ impl ConstraintDescription {
             Annotation::Key(_) => HashSet::from(KEY_CONSTRAINTS.clone()),
 
             // no constraints:
-            Annotation::Cascade(_) => HashSet::new(),
+            Annotation::Cascade(_) | Annotation::Doc(_) => HashSet::new(),
         }
     }
 

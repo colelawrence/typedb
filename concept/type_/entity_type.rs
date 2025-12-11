@@ -32,7 +32,7 @@ use crate::{
     error::{ConceptReadError, ConceptWriteError},
     thing::{entity::Entity, thing_manager::ThingManager},
     type_::{
-        annotation::{Annotation, AnnotationAbstract, AnnotationCategory, AnnotationError, DefaultFrom},
+        annotation::{Annotation, AnnotationAbstract, AnnotationCategory, AnnotationDoc, AnnotationError, DefaultFrom},
         attribute_type::AttributeType,
         constraint::{CapabilityConstraint, TypeConstraint},
         object_type::ObjectType,
@@ -256,6 +256,7 @@ impl EntityType {
             EntityTypeAnnotation::Abstract(_) => {
                 type_manager.set_entity_type_annotation_abstract(snapshot, thing_manager, *self, storage_counters)?
             }
+            EntityTypeAnnotation::Doc(_) => {}
         };
         Ok(())
     }
@@ -270,6 +271,7 @@ impl EntityType {
             .map_err(|typedb_source| ConceptWriteError::Annotation { typedb_source })?;
         match entity_annotation {
             EntityTypeAnnotation::Abstract(_) => type_manager.unset_entity_type_annotation_abstract(snapshot, *self)?,
+            EntityTypeAnnotation::Doc(_) => {}
         }
 
         Ok(())
@@ -493,9 +495,10 @@ impl fmt::Display for EntityType {
     }
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum EntityTypeAnnotation {
     Abstract(AnnotationAbstract),
+    Doc(AnnotationDoc),
 }
 
 impl TryFrom<Annotation> for EntityTypeAnnotation {
@@ -503,6 +506,7 @@ impl TryFrom<Annotation> for EntityTypeAnnotation {
     fn try_from(annotation: Annotation) -> Result<EntityTypeAnnotation, AnnotationError> {
         match annotation {
             Annotation::Abstract(annotation) => Ok(EntityTypeAnnotation::Abstract(annotation)),
+            Annotation::Doc(annotation) => Ok(EntityTypeAnnotation::Doc(annotation)),
 
             | Annotation::Distinct(_)
             | Annotation::Independent(_)
@@ -523,6 +527,7 @@ impl From<EntityTypeAnnotation> for Annotation {
     fn from(val: EntityTypeAnnotation) -> Self {
         match val {
             EntityTypeAnnotation::Abstract(annotation) => Annotation::Abstract(annotation),
+            EntityTypeAnnotation::Doc(annotation) => Annotation::Doc(annotation),
         }
     }
 }

@@ -303,7 +303,7 @@ impl TryFrom<Annotation> for OwnsAnnotation {
             Annotation::Range(annotation) => Ok(OwnsAnnotation::Range(annotation)),
             Annotation::Values(annotation) => Ok(OwnsAnnotation::Values(annotation)),
 
-            | Annotation::Abstract(_) | Annotation::Independent(_) | Annotation::Cascade(_) => {
+            | Annotation::Abstract(_) | Annotation::Independent(_) | Annotation::Cascade(_) | Annotation::Doc(_) => {
                 Err(AnnotationError::UnsupportedAnnotationForOwns { category: annotation.category() })
             }
         }
@@ -355,6 +355,7 @@ impl PartialEq<Annotation> for OwnsAnnotation {
             Annotation::Independent(_) => false,
             Annotation::Regex(_) => false,
             Annotation::Cascade(_) => false,
+            Annotation::Doc(_) => false,
         }
     }
 }

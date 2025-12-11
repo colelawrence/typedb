@@ -34,6 +34,7 @@ use crate::type_::{
 pub enum Annotation {
     Abstract(AnnotationAbstract),
     Distinct(AnnotationDistinct),
+    Doc(AnnotationDoc),
     Independent(AnnotationIndependent),
     Unique(AnnotationUnique),
     Key(AnnotationKey),
@@ -51,6 +52,7 @@ impl fmt::Display for Annotation {
         match self {
             Annotation::Abstract(annotation) => fmt::Display::fmt(annotation, f),
             Annotation::Distinct(annotation) => fmt::Display::fmt(annotation, f),
+            Annotation::Doc(annotation) => fmt::Display::fmt(annotation, f),
             Annotation::Independent(annotation) => fmt::Display::fmt(annotation, f),
             Annotation::Unique(annotation) => fmt::Display::fmt(annotation, f),
             Annotation::Key(annotation) => fmt::Display::fmt(annotation, f),
@@ -78,6 +80,35 @@ pub struct AnnotationDistinct;
 impl fmt::Display for AnnotationDistinct {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "@distinct")
+    }
+}
+
+#[derive(Debug, Default, Clone, Eq, PartialEq, Hash)]
+pub struct AnnotationDoc {
+    description: Option<String>,
+}
+
+impl AnnotationDoc {
+    pub fn new(description: Option<String>, _metadata: std::collections::BTreeMap<String, Value<'static>>) -> Self {
+        Self { description }
+    }
+
+    pub fn from_description(description: Option<String>) -> Self {
+        Self { description }
+    }
+
+    pub fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+}
+
+impl fmt::Display for AnnotationDoc {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "@doc(")?;
+        if let Some(desc) = &self.description {
+            write!(f, "\"{}\"", desc.replace('\\', "\\\\").replace('"', "\\\""))?;
+        }
+        write!(f, ")")
     }
 }
 
@@ -537,6 +568,7 @@ impl Annotation {
         match self {
             Self::Abstract(_) => AnnotationCategory::Abstract,
             Self::Distinct(_) => AnnotationCategory::Distinct,
+            Self::Doc(_) => AnnotationCategory::Doc,
             Self::Independent(_) => AnnotationCategory::Independent,
             Self::Unique(_) => AnnotationCategory::Unique,
             Self::Key(_) => AnnotationCategory::Key,
@@ -575,6 +607,7 @@ impl Annotation {
 pub enum AnnotationCategory {
     Abstract,
     Distinct,
+    Doc,
     Independent,
     Unique,
     Key,
@@ -588,10 +621,11 @@ pub enum AnnotationCategory {
 }
 
 impl AnnotationCategory {
-    const fn to_default(self) -> Annotation {
+    fn to_default(self) -> Annotation {
         match self {
             AnnotationCategory::Abstract => Annotation::Abstract(AnnotationAbstract),
             AnnotationCategory::Distinct => Annotation::Distinct(AnnotationDistinct),
+            AnnotationCategory::Doc => Annotation::Doc(AnnotationDoc::default()),
             AnnotationCategory::Independent => Annotation::Independent(AnnotationIndependent),
             AnnotationCategory::Unique => Annotation::Unique(AnnotationUnique),
             AnnotationCategory::Key => Annotation::Key(AnnotationKey),
@@ -610,6 +644,7 @@ impl AnnotationCategory {
             AnnotationCategory::Key => !matches!(other, AnnotationCategory::Unique | AnnotationCategory::Cardinality),
             | AnnotationCategory::Abstract
             | AnnotationCategory::Distinct
+            | AnnotationCategory::Doc
             | AnnotationCategory::Independent
             | AnnotationCategory::Regex
             | AnnotationCategory::Cascade
@@ -628,6 +663,7 @@ impl AnnotationCategory {
             | AnnotationCategory::Cascade => false,
 
             | AnnotationCategory::Cardinality
+            | AnnotationCategory::Doc
             | AnnotationCategory::Regex
             | AnnotationCategory::Range
             | AnnotationCategory::Values => true,
@@ -638,6 +674,7 @@ impl AnnotationCategory {
         match self {
             AnnotationCategory::Abstract => typeql::token::Annotation::Abstract.as_str(),
             AnnotationCategory::Distinct => typeql::token::Annotation::Distinct.as_str(),
+            AnnotationCategory::Doc => typeql::token::Annotation::Doc.as_str(),
             AnnotationCategory::Independent => typeql::token::Annotation::Independent.as_str(),
             AnnotationCategory::Unique => typeql::token::Annotation::Unique.as_str(),
             AnnotationCategory::Key => typeql::token::Annotation::Key.as_str(),
@@ -722,6 +759,22 @@ empty_type_vertex_property_encoding!(AnnotationAbstract, PropertyAnnotationAbstr
 empty_type_vertex_property_encoding!(AnnotationIndependent, PropertyAnnotationIndependent);
 empty_type_vertex_property_encoding!(AnnotationCascade, PropertyAnnotationCascade);
 
+impl TypeVertexPropertyEncoding for AnnotationDoc {
+    const INFIX: Infix = Infix::PropertyAnnotationDoc;
+
+    fn from_value_bytes(value: &[u8]) -> AnnotationDoc {
+        if value.is_empty() {
+            AnnotationDoc::from_description(None)
+        } else {
+            AnnotationDoc::from_description(Some(std::str::from_utf8(value).unwrap().to_owned()))
+        }
+    }
+
+    fn to_value_bytes(&self) -> Option<Bytes<'static, BUFFER_VALUE_INLINE>> {
+        self.description.as_ref().map(|desc| Bytes::Array(ByteArray::copy(desc.as_bytes())))
+    }
+}
+
 impl TypeVertexPropertyEncoding for AnnotationRegex {
     const INFIX: Infix = Infix::PropertyAnnotationRegex;
 
@@ -804,6 +857,22 @@ empty_type_edge_property_encoder!(AnnotationAbstract, PropertyAnnotationAbstract
 empty_type_edge_property_encoder!(AnnotationDistinct, PropertyAnnotationDistinct);
 empty_type_edge_property_encoder!(AnnotationUnique, PropertyAnnotationUnique);
 empty_type_edge_property_encoder!(AnnotationKey, PropertyAnnotationKey);
+
+impl TypeEdgePropertyEncoding for AnnotationDoc {
+    const INFIX: Infix = Infix::PropertyAnnotationDoc;
+
+    fn from_value_bytes(value: &[u8]) -> AnnotationDoc {
+        if value.is_empty() {
+            AnnotationDoc::from_description(None)
+        } else {
+            AnnotationDoc::from_description(Some(std::str::from_utf8(value).unwrap().to_owned()))
+        }
+    }
+
+    fn to_value_bytes(&self) -> Option<Bytes<'static, BUFFER_VALUE_INLINE>> {
+        self.description.as_ref().map(|desc| Bytes::Array(ByteArray::copy(desc.as_bytes())))
+    }
+}
 
 impl TypeEdgePropertyEncoding for AnnotationCardinality {
     const INFIX: Infix = Infix::PropertyAnnotationCardinality;
