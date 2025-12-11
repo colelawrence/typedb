@@ -4,3 +4,6 @@
 [submodule "typeql"]
 	path = typeql
 	url = https://github.com/colelawrence/typeql.git
+[submodule "console"]
+	path = console
+	url = https://github.com/typedb/typedb-console.git

@@ -18,14 +18,19 @@ print_usage() {
     echo ""
     echo "Commands:"
     echo "  server    Start the TypeDB server"
+    echo "  console   Start the TypeDB console (interactive REPL)"
     echo ""
-    echo "Run 'typedb server --help' for server options."
+    echo "Run 'typedb server --help' or 'typedb console --help' for options."
 }
 
 case "${1:-}" in
     server)
         TYPEDB_SERVER_BIN="${TYPEDB_HOME}/server/typedb_server_bin"
         exec "$TYPEDB_SERVER_BIN" "${@:2}"
+        ;;
+    console)
+        TYPEDB_CONSOLE_BIN="${TYPEDB_HOME}/console/typedb-console"
+        exec "$TYPEDB_CONSOLE_BIN" "${@:2}"
         ;;
     -h|--help|help)
         print_usage

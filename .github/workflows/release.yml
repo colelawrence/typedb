@@ -11,6 +11,7 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'studio/**'
+      - 'console/**'
       - 'scripts/build-studio.sh'
       - '.github/workflows/release.yml'
   workflow_dispatch:
@@ -116,17 +117,23 @@ jobs:
         if: runner.os == 'Windows'
         run: choco install protoc
 
-      - name: Build
+      - name: Build Server
         run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Build Console
+        run: cargo build --release --target ${{ matrix.target }} --manifest-path console/Cargo.toml
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
         run: |
           mkdir -p dist/typedb-${{ matrix.name }}/server
+          mkdir -p dist/typedb-${{ matrix.name }}/console
           cp target/${{ matrix.target }}/release/typedb_server_bin dist/typedb-${{ matrix.name }}/server/
           cp server/config.yml dist/typedb-${{ matrix.name }}/server/
+          cp console/target/${{ matrix.target }}/release/typedb-console dist/typedb-${{ matrix.name }}/console/
           cp binary/typedb dist/typedb-${{ matrix.name }}/
           chmod +x dist/typedb-${{ matrix.name }}/typedb
+          chmod +x dist/typedb-${{ matrix.name }}/console/typedb-console
           cp LICENSE dist/typedb-${{ matrix.name }}/
           mkdir -p dist/typedb-${{ matrix.name }}/server/data
           tar -czvf "typedb-${{ needs.generate-version.outputs.version }}-${{ matrix.name }}.tar.gz" \
@@ -138,8 +145,10 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist/typedb-${{ matrix.name }}/server
+          New-Item -ItemType Directory -Force -Path dist/typedb-${{ matrix.name }}/console
           Copy-Item target/${{ matrix.target }}/release/typedb_server_bin.exe dist/typedb-${{ matrix.name }}/server/
           Copy-Item server/config.yml dist/typedb-${{ matrix.name }}/server/
+          Copy-Item console/target/${{ matrix.target }}/release/typedb-console.exe dist/typedb-${{ matrix.name }}/console/
           Copy-Item binary/typedb.bat dist/typedb-${{ matrix.name }}/
           Copy-Item LICENSE dist/typedb-${{ matrix.name }}/
           New-Item -ItemType Directory -Force -Path dist/typedb-${{ matrix.name }}/server/data
@@ -177,17 +186,22 @@ jobs:
       - name: Compose release body
         run: |
           cat > dist/release_body.md <<'EOF'
-          TypeDB server with embedded Studio.
+          TypeDB server with embedded Studio and Console.
 
           Built from commit ${{ github.sha }}
 
           ## Quick Start
 
           ```bash
-          # Extract and run
+          # Extract and run server
           tar -xzf typedb-${{ needs.generate-version.outputs.version }}-<platform>.tar.gz
           cd typedb-<platform>
           ./typedb server
+          ```
+
+          ```bash
+          # Connect with console (in another terminal)
+          ./typedb console
           ```
 
           Studio available at http://localhost:8000/studio/
