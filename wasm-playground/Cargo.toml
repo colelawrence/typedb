@@ -43,6 +43,7 @@ options = { path = "../common/options", default-features = false }
 resource = { path = "../resource", default-features = false }
 typeql = { git = "https://github.com/typedb/typeql", tag = "3.7.0", default-features = false }
 lending_iterator = { path = "../common/lending_iterator", default-features = false }
+error = { path = "../common/error", default-features = false }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"

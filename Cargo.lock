@@ -5665,6 +5665,7 @@ dependencies = [
  "console_error_panic_hook",
  "database",
  "encoding",
+ "error",
  "executor",
  "ir",
  "js-sys",

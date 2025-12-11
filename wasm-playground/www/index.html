@@ -523,6 +523,7 @@
                 </div>
                 <div class="query-toolbar-right">
                     <button class="btn-secondary" id="clear-btn">Clear</button>
+                    <button class="btn-secondary" id="analyze-btn">Analyze</button>
                     <button class="btn-run" id="run-btn">Run <kbd>Ctrl+Enter</kbd></button>
                 </div>
             </div>
@@ -542,6 +543,7 @@ Examples:
                     <button data-example="query">3. Query Data</button>
                     <button data-example="relations">4. Query Relations</button>
                     <button data-example="traversal">5. Graph Traversal</button>
+                    <button data-example="analyze-error">Test Analyze</button>
                 </div>
             </div>
         </div>
@@ -640,7 +642,16 @@ $person isa person,
     has age $age;
 $company isa company, has name $company_name;
 (employee: $person, employer: $company) isa employment;
-$age > 25;`
+$age > 25;`,
+
+            'analyze-error': `# Test the Analyze endpoint
+# Try these queries to see real-time diagnostics
+
+# Syntax error - missing type label
+match $x isa;
+
+# Or try a semantic error (after defining schema):
+# match $x isa nonexistent_type;`
         };
 
         // Output helpers
@@ -900,6 +911,63 @@ $age > 25;`
         // Debounced version of updateQueryTypeIndicator
         const debouncedUpdateIndicator = debounce(updateQueryTypeIndicator, 150);
 
+        // Render analyze diagnostics
+        function renderAnalyzeDiagnostic(diag) {
+            const div = document.createElement('div');
+            div.className = 'error-box';
+
+            let html = `<div class="error-kind">${escapeHtml(diag.code || 'Diagnostic')}</div>`;
+            html += `<div class="error-message">${escapeHtml(diag.message)}</div>`;
+
+            if (diag.position) {
+                html += `<div class="error-location">Line ${diag.position.line}, Column ${diag.position.column}</div>`;
+            }
+            if (diag.span) {
+                html += `<div class="error-location">Span: ${diag.span.begin}-${diag.span.end}</div>`;
+            }
+            if (diag.formatted) {
+                html += `<pre>${escapeHtml(diag.formatted)}</pre>`;
+            }
+
+            div.innerHTML = html;
+            return div;
+        }
+
+        // Analyze query (without executing)
+        function analyzeQuery() {
+            if (!db) {
+                log('Database not initialized', 'error');
+                return;
+            }
+
+            const queryInput = document.getElementById('query-input');
+            const query = queryInput.value.trim();
+
+            if (!query) {
+                log('No query to analyze', 'info');
+                return;
+            }
+
+            log(`\nAnalyzing: ${query.split('\n')[0]}${query.includes('\n') ? '...' : ''}`, 'info');
+
+            try {
+                const result = db.analyze(query);
+
+                if (result.valid) {
+                    log(`✓ Query is valid (${result.queryType || 'unknown type'})`, 'success');
+                } else {
+                    log(`✗ Query has ${result.diagnostics.length} diagnostic(s):`, 'error');
+                    result.diagnostics.forEach(diag => {
+                        output.appendChild(renderAnalyzeDiagnostic(diag));
+                    });
+                }
+
+                output.scrollTop = output.scrollHeight;
+            } catch (e) {
+                log(`Analysis error: ${e.message}`, 'error');
+            }
+        }
+
         // Run query
         function runQuery() {
             if (!db) {
@@ -936,6 +1004,7 @@ $age > 25;`
 
         // Event listeners
         document.getElementById('run-btn').addEventListener('click', runQuery);
+        document.getElementById('analyze-btn').addEventListener('click', analyzeQuery);
         document.getElementById('clear-btn').addEventListener('click', () => {
             document.getElementById('query-input').value = '';
             updateQueryTypeIndicator();

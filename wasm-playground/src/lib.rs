@@ -41,35 +41,19 @@ use wasm_bindgen::prelude::*;
 #[serde(tag = "kind")]
 pub enum RichValue {
     /// An entity instance
-    Entity {
-        type_name: String,
-        iid: String,
-    },
+    Entity { type_name: String, iid: String },
     /// A relation instance
-    Relation {
-        type_name: String,
-        iid: String,
-    },
+    Relation { type_name: String, iid: String },
     /// An attribute with its actual value
-    Attribute {
-        type_name: String,
-        value: AttributeValue,
-    },
+    Attribute { type_name: String, value: AttributeValue },
     /// A type (schema element)
-    Type {
-        category: String,
-        label: String,
-    },
+    Type { category: String, label: String },
     /// A computed/literal value
     Value(AttributeValue),
     /// A list of things
-    ThingList {
-        items: Vec<RichValue>,
-    },
+    ThingList { items: Vec<RichValue> },
     /// A list of values
-    ValueList {
-        items: Vec<AttributeValue>,
-    },
+    ValueList { items: Vec<AttributeValue> },
     /// Null/empty value
     None,
 }
@@ -113,6 +97,48 @@ pub struct QueryResult {
     pub row_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<QueryError>,
+}
+
+/// Diagnostic for query analysis (syntax errors, semantic errors, etc.)
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalyzeDiagnostic {
+    pub severity: String,
+    pub code: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<DiagnosticPosition>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub span: Option<DiagnosticSpan>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub formatted: Option<String>,
+}
+
+/// Position in source (line/column)
+#[derive(Debug, Clone, Serialize)]
+pub struct DiagnosticPosition {
+    pub line: usize,
+    pub column: usize,
+}
+
+/// Span in source (byte offsets)
+#[derive(Debug, Clone, Serialize)]
+pub struct DiagnosticSpan {
+    pub begin: usize,
+    pub end: usize,
+}
+
+/// Query analysis result
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalyzeResult {
+    pub source: String,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub diagnostics: Vec<AnalyzeDiagnostic>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub query_type: Option<String>,
+    /// True if the query is valid (no errors)
+    pub valid: bool,
 }
 
 /// Schema/write operation result
@@ -172,9 +198,7 @@ impl TypeDBPlayground {
         let database = Database::create_in_memory(name)
             .map_err(|e| JsError::new(&format!("Failed to create database: {:?}", e)))?;
 
-        Ok(TypeDBPlayground {
-            database: Arc::new(database),
-        })
+        Ok(TypeDBPlayground { database: Arc::new(database) })
     }
 
     /// Execute a schema definition query.
@@ -257,6 +281,14 @@ impl TypeDBPlayground {
         });
         serde_wasm_bindgen::to_value(&info).unwrap_or(JsValue::NULL)
     }
+
+    /// Analyze a query without executing it.
+    /// Returns diagnostics (errors, warnings) and query structure information.
+    #[wasm_bindgen]
+    pub fn analyze(&self, query: &str) -> JsValue {
+        let result = self.analyze_internal(query);
+        serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+    }
 }
 
 // ============================================================================
@@ -319,11 +351,7 @@ impl TypeDBPlayground {
         match self.execute_write(tx, query) {
             Ok(count) => OperationResult {
                 success: true,
-                message: format!(
-                    "{} row{} affected",
-                    count,
-                    if count == 1 { "" } else { "s" }
-                ),
+                message: format!("{} row{} affected", count, if count == 1 { "" } else { "s" }),
                 row_count: Some(count),
                 error: None,
             },
@@ -356,40 +384,26 @@ impl TypeDBPlayground {
         };
 
         match self.execute_query(&tx, query) {
-            Ok((columns, rows)) => QueryResult {
-                success: true,
-                row_count: rows.len(),
-                columns,
-                rows,
-                error: None,
-            },
-            Err(e) => QueryResult {
-                success: false,
-                columns: vec![],
-                rows: vec![],
-                row_count: 0,
-                error: Some(e),
-            },
+            Ok((columns, rows)) => QueryResult { success: true, row_count: rows.len(), columns, rows, error: None },
+            Err(e) => QueryResult { success: false, columns: vec![], rows: vec![], row_count: 0, error: Some(e) },
         }
     }
 
-    fn execute_schema(
-        &self,
-        mut tx: TransactionSchema<NoopDurabilityClient>,
-        schema: &str,
-    ) -> Result<(), QueryError> {
-        let structure = typeql::parse_query(schema)
-            .map_err(|e| parse_typeql_error(e, schema))?
-            .into_structure();
+    fn execute_schema(&self, mut tx: TransactionSchema<NoopDurabilityClient>, schema: &str) -> Result<(), QueryError> {
+        let structure = typeql::parse_query(schema).map_err(|e| parse_typeql_error(e, schema))?.into_structure();
 
         let define = match structure {
             typeql::query::QueryStructure::Schema(schema_query) => schema_query,
             typeql::query::QueryStructure::Pipeline(_) => {
                 return Err(QueryError {
                     kind: ErrorKind::TypeError,
-                    message: "Pipeline queries (match/insert/delete) cannot be executed in a schema transaction".to_string(),
+                    message: "Pipeline queries (match/insert/delete) cannot be executed in a schema transaction"
+                        .to_string(),
                     location: None,
-                    hint: Some("Use write() or query() for data operations, or execute() which auto-detects query type".to_string()),
+                    hint: Some(
+                        "Use write() or query() for data operations, or execute() which auto-detects query type"
+                            .to_string(),
+                    ),
                 });
             }
         };
@@ -402,14 +416,7 @@ impl TypeDBPlayground {
         })?;
 
         tx.query_manager
-            .execute_schema(
-                snapshot,
-                &tx.type_manager,
-                &tx.thing_manager,
-                &tx.function_manager,
-                define,
-                schema,
-            )
+            .execute_schema(snapshot, &tx.type_manager, &tx.thing_manager, &tx.function_manager, define, schema)
             .map_err(|e| QueryError {
                 kind: ErrorKind::SchemaError,
                 message: format!("{:?}", e),
@@ -426,23 +433,21 @@ impl TypeDBPlayground {
         })
     }
 
-    fn execute_write(
-        &self,
-        tx: TransactionWrite<NoopDurabilityClient>,
-        query: &str,
-    ) -> Result<usize, QueryError> {
-        let structure = typeql::parse_query(query)
-            .map_err(|e| parse_typeql_error(e, query))?
-            .into_structure();
+    fn execute_write(&self, tx: TransactionWrite<NoopDurabilityClient>, query: &str) -> Result<usize, QueryError> {
+        let structure = typeql::parse_query(query).map_err(|e| parse_typeql_error(e, query))?.into_structure();
 
         let parsed = match structure {
             typeql::query::QueryStructure::Pipeline(pipeline) => pipeline,
             typeql::query::QueryStructure::Schema(_) => {
                 return Err(QueryError {
                     kind: ErrorKind::TypeError,
-                    message: "Schema queries (define/undefine/redefine) cannot be executed in a write transaction".to_string(),
+                    message: "Schema queries (define/undefine/redefine) cannot be executed in a write transaction"
+                        .to_string(),
                     location: None,
-                    hint: Some("Use define_schema() for schema modifications, or execute() which auto-detects query type".to_string()),
+                    hint: Some(
+                        "Use define_schema() for schema modifications, or execute() which auto-detects query type"
+                            .to_string(),
+                    ),
                 });
             }
         };
@@ -465,9 +470,8 @@ impl TypeDBPlayground {
                 hint: Some("Check that all types and attributes are defined in the schema".to_string()),
             })?;
 
-        let (mut iterator, context) = pipeline
-            .into_rows_iterator(ExecutionInterrupt::new_uninterruptible())
-            .map_err(|(e, _)| QueryError {
+        let (mut iterator, context) =
+            pipeline.into_rows_iterator(ExecutionInterrupt::new_uninterruptible()).map_err(|(e, _)| QueryError {
                 kind: ErrorKind::DataError,
                 message: format!("{:?}", e),
                 location: None,
@@ -491,14 +495,12 @@ impl TypeDBPlayground {
             location: None,
             hint: None,
         })?;
-        snapshot
-            .commit(&mut CommitProfile::DISABLED)
-            .map_err(|e| QueryError {
-                kind: ErrorKind::TransactionError,
-                message: format!("Commit failed: {:?}", e),
-                location: None,
-                hint: None,
-            })?;
+        snapshot.commit(&mut CommitProfile::DISABLED).map_err(|e| QueryError {
+            kind: ErrorKind::TransactionError,
+            message: format!("Commit failed: {:?}", e),
+            location: None,
+            hint: None,
+        })?;
 
         Ok(count)
     }
@@ -508,18 +510,20 @@ impl TypeDBPlayground {
         tx: &TransactionRead<NoopDurabilityClient>,
         query: &str,
     ) -> Result<(Vec<String>, Vec<ResultRow>), QueryError> {
-        let structure = typeql::parse_query(query)
-            .map_err(|e| parse_typeql_error(e, query))?
-            .into_structure();
+        let structure = typeql::parse_query(query).map_err(|e| parse_typeql_error(e, query))?.into_structure();
 
         let parsed = match structure {
             typeql::query::QueryStructure::Pipeline(pipeline) => pipeline,
             typeql::query::QueryStructure::Schema(_) => {
                 return Err(QueryError {
                     kind: ErrorKind::TypeError,
-                    message: "Schema queries (define/undefine/redefine) cannot be executed in a read transaction".to_string(),
+                    message: "Schema queries (define/undefine/redefine) cannot be executed in a read transaction"
+                        .to_string(),
                     location: None,
-                    hint: Some("Use define_schema() for schema modifications, or execute() which auto-detects query type".to_string()),
+                    hint: Some(
+                        "Use define_schema() for schema modifications, or execute() which auto-detects query type"
+                            .to_string(),
+                    ),
                 });
             }
         };
@@ -545,9 +549,8 @@ impl TypeDBPlayground {
         // Get variable names from the pipeline's rows_positions
         let var_names = extract_variable_names_from_positions(pipeline.rows_positions());
 
-        let (mut iterator, context) = pipeline
-            .into_rows_iterator(ExecutionInterrupt::new_uninterruptible())
-            .map_err(|(e, _)| QueryError {
+        let (mut iterator, context) =
+            pipeline.into_rows_iterator(ExecutionInterrupt::new_uninterruptible()).map_err(|(e, _)| QueryError {
                 kind: ErrorKind::DataError,
                 message: format!("{:?}", e),
                 location: None,
@@ -570,10 +573,7 @@ impl TypeDBPlayground {
                 .enumerate()
                 .map(|(i, v)| {
                     let var_name = var_names.get(i).cloned().unwrap_or_else(|| format!("${}", i));
-                    ColumnValue {
-                        variable: var_name,
-                        value: convert_variable_value(v, &context, &tx.type_manager),
-                    }
+                    ColumnValue { variable: var_name, value: convert_variable_value(v, &context, &tx.type_manager) }
                 })
                 .collect();
 
@@ -581,6 +581,75 @@ impl TypeDBPlayground {
         }
 
         Ok((var_names, rows))
+    }
+
+    fn analyze_internal(&self, query_str: &str) -> AnalyzeResult {
+        let parsed = match typeql::parse_query(query_str) {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                return AnalyzeResult {
+                    source: query_str.to_string(),
+                    diagnostics: encode_typeql_error(query_str, &e),
+                    query_type: None,
+                    valid: false,
+                };
+            }
+        };
+
+        let detected = detect_query_type_internal(query_str);
+        let query_type = match detected.query_type {
+            DetectedQueryType::Schema => Some("schema".to_string()),
+            DetectedQueryType::Write => Some("write".to_string()),
+            DetectedQueryType::Read => Some("read".to_string()),
+            DetectedQueryType::Unknown => None,
+        };
+
+        let structure = parsed.into_structure();
+        match structure {
+            typeql::query::QueryStructure::Pipeline(pipeline) => {
+                let tx = match TransactionRead::open(self.database.clone(), TransactionOptions::default()) {
+                    Ok(tx) => tx,
+                    Err(e) => {
+                        return AnalyzeResult {
+                            source: query_str.to_string(),
+                            diagnostics: vec![AnalyzeDiagnostic {
+                                severity: "error".to_string(),
+                                code: "TX001".to_string(),
+                                message: format!("Failed to open transaction: {:?}", e),
+                                position: None,
+                                span: None,
+                                formatted: None,
+                            }],
+                            query_type,
+                            valid: false,
+                        };
+                    }
+                };
+
+                let snapshot = tx.snapshot.clone_inner();
+                match tx.query_manager.analyse(
+                    snapshot,
+                    &tx.type_manager,
+                    tx.thing_manager.clone(),
+                    &tx.function_manager,
+                    &pipeline,
+                    query_str,
+                ) {
+                    Ok(_analyzed) => {
+                        AnalyzeResult { source: query_str.to_string(), diagnostics: vec![], query_type, valid: true }
+                    }
+                    Err(e) => AnalyzeResult {
+                        source: query_str.to_string(),
+                        diagnostics: encode_query_error(query_str, &e),
+                        query_type,
+                        valid: false,
+                    },
+                }
+            }
+            typeql::query::QueryStructure::Schema(_) => {
+                AnalyzeResult { source: query_str.to_string(), diagnostics: vec![], query_type, valid: true }
+            }
+        }
     }
 }
 
@@ -590,9 +659,7 @@ impl TypeDBPlayground {
 
 fn convert_variable_value(
     value: &VariableValue<'_>,
-    context: &executor::pipeline::stage::ExecutionContext<
-        storage::snapshot::ReadSnapshot<NoopDurabilityClient>,
-    >,
+    context: &executor::pipeline::stage::ExecutionContext<storage::snapshot::ReadSnapshot<NoopDurabilityClient>>,
     type_manager: &concept::type_::type_manager::TypeManager,
 ) -> RichValue {
     match value {
@@ -612,34 +679,24 @@ fn convert_variable_value(
                 Type::RoleType(_) => "role",
             };
 
-            RichValue::Type {
-                category: category.to_string(),
-                label,
-            }
+            RichValue::Type { category: category.to_string(), label }
         }
 
         VariableValue::Thing(thing) => convert_thing(thing, context, type_manager),
 
         VariableValue::Value(val) => RichValue::Value(convert_value(val)),
 
-        VariableValue::ThingList(items) => RichValue::ThingList {
-            items: items
-                .iter()
-                .map(|t| convert_thing(t, context, type_manager))
-                .collect(),
-        },
+        VariableValue::ThingList(items) => {
+            RichValue::ThingList { items: items.iter().map(|t| convert_thing(t, context, type_manager)).collect() }
+        }
 
-        VariableValue::ValueList(items) => RichValue::ValueList {
-            items: items.iter().map(convert_value).collect(),
-        },
+        VariableValue::ValueList(items) => RichValue::ValueList { items: items.iter().map(convert_value).collect() },
     }
 }
 
 fn convert_thing(
     thing: &Thing,
-    context: &executor::pipeline::stage::ExecutionContext<
-        storage::snapshot::ReadSnapshot<NoopDurabilityClient>,
-    >,
+    context: &executor::pipeline::stage::ExecutionContext<storage::snapshot::ReadSnapshot<NoopDurabilityClient>>,
     type_manager: &concept::type_::type_manager::TypeManager,
 ) -> RichValue {
     let type_ = thing.type_();
@@ -650,30 +707,21 @@ fn convert_thing(
         .unwrap_or_else(|| "unknown".to_string());
 
     match thing {
-        Thing::Entity(entity) => RichValue::Entity {
-            type_name: label,
-            iid: format!("{:x}", entity.vertex().object_id().as_u64()),
-        },
-        Thing::Relation(relation) => RichValue::Relation {
-            type_name: label,
-            iid: format!("{:x}", relation.vertex().object_id().as_u64()),
-        },
+        Thing::Entity(entity) => {
+            RichValue::Entity { type_name: label, iid: format!("{:x}", entity.vertex().object_id().as_u64()) }
+        }
+        Thing::Relation(relation) => {
+            RichValue::Relation { type_name: label, iid: format!("{:x}", relation.vertex().object_id().as_u64()) }
+        }
         Thing::Attribute(attr) => {
             // Try to get the actual value
             let value = attr
-                .get_value(
-                    context.snapshot.as_ref(),
-                    context.thing_manager.as_ref(),
-                    StorageCounters::DISABLED,
-                )
+                .get_value(context.snapshot.as_ref(), context.thing_manager.as_ref(), StorageCounters::DISABLED)
                 .ok()
                 .map(|v| convert_value(&v))
                 .unwrap_or(AttributeValue::String("<error>".to_string()));
 
-            RichValue::Attribute {
-                type_name: label,
-                value,
-            }
+            RichValue::Attribute { type_name: label, value }
         }
     }
 }
@@ -699,10 +747,7 @@ fn extract_variable_names_from_positions(
     match positions {
         Some(pos_map) => {
             // Sort by position index to get variable names in column order
-            let mut vars: Vec<_> = pos_map
-                .iter()
-                .map(|(name, pos)| (pos.as_usize(), format!("${}", name)))
-                .collect();
+            let mut vars: Vec<_> = pos_map.iter().map(|(name, pos)| (pos.as_usize(), format!("${}", name))).collect();
             vars.sort_by_key(|(pos, _)| *pos);
             vars.into_iter().map(|(_, name)| name).collect()
         }
@@ -721,7 +766,10 @@ fn parse_typeql_error(error: typeql::Error, _query: &str) -> QueryError {
         kind: ErrorKind::ParseError,
         message: clean_error_message(&message),
         location,
-        hint: Some("Check TypeQL syntax. Common issues: missing semicolons, undefined types, or incorrect keywords.".to_string()),
+        hint: Some(
+            "Check TypeQL syntax. Common issues: missing semicolons, undefined types, or incorrect keywords."
+                .to_string(),
+        ),
     }
 }
 
@@ -735,11 +783,7 @@ fn extract_error_location(message: &str) -> Option<ErrorLocation> {
                 let after_colon = &rest[colon_idx + 1..];
                 if let Some(end) = after_colon.find(|c: char| !c.is_ascii_digit()) {
                     if let Ok(column) = after_colon[..end].parse::<usize>() {
-                        return Some(ErrorLocation {
-                            line,
-                            column,
-                            snippet: None,
-                        });
+                        return Some(ErrorLocation { line, column, snippet: None });
                     }
                 }
             }
@@ -750,10 +794,7 @@ fn extract_error_location(message: &str) -> Option<ErrorLocation> {
 
 fn clean_error_message(message: &str) -> String {
     // Remove debug formatting artifacts
-    let cleaned = message
-        .replace("Error { errors: [", "")
-        .replace("] }", "")
-        .replace("TypeQLError::", "");
+    let cleaned = message.replace("Error { errors: [", "").replace("] }", "").replace("TypeQLError::", "");
 
     // Truncate if too long
     if cleaned.len() > 500 {
@@ -761,6 +802,80 @@ fn clean_error_message(message: &str) -> String {
     } else {
         cleaned
     }
+}
+
+// ============================================================================
+// Diagnostic Encoding for Analyze
+// ============================================================================
+
+fn line_col_to_offset(source: &str, line: usize, col: usize) -> Option<usize> {
+    let mut offset = 0;
+    for (i, line_str) in source.lines().enumerate() {
+        if i + 1 == line {
+            return Some(offset + col.min(line_str.len()));
+        }
+        offset += line_str.len() + 1;
+    }
+    None
+}
+
+fn encode_typeql_error(source: &str, error: &typeql::Error) -> Vec<AnalyzeDiagnostic> {
+    use typeql::common::error::TypeQLError;
+
+    error
+        .errors()
+        .iter()
+        .map(|err| {
+            let code = err.format_code();
+            let message = err.message();
+
+            match err {
+                TypeQLError::SyntaxErrorDetailed { error_line_nr, error_col, formatted_error, .. } => {
+                    let position = Some(DiagnosticPosition { line: *error_line_nr, column: *error_col });
+                    let span = line_col_to_offset(source, *error_line_nr, *error_col)
+                        .map(|begin| DiagnosticSpan { begin, end: begin + 1 });
+                    AnalyzeDiagnostic {
+                        severity: "error".to_string(),
+                        code,
+                        message,
+                        position,
+                        span,
+                        formatted: Some(formatted_error.clone()),
+                    }
+                }
+                _ => AnalyzeDiagnostic {
+                    severity: "error".to_string(),
+                    code,
+                    message,
+                    position: None,
+                    span: None,
+                    formatted: None,
+                },
+            }
+        })
+        .collect()
+}
+
+fn encode_query_error(source: &str, error: &query::error::QueryError) -> Vec<AnalyzeDiagnostic> {
+    use error::TypeDBError;
+    use typeql::common::Spannable;
+
+    let span = error.bottom_source_span();
+    let diagnostic_span = span.map(|s| DiagnosticSpan { begin: s.begin_offset, end: s.end_offset });
+    let position = span.and_then(|s| {
+        source
+            .line_col(s)
+            .map(|(begin, _)| DiagnosticPosition { line: begin.line as usize, column: begin.column as usize })
+    });
+
+    vec![AnalyzeDiagnostic {
+        severity: "error".to_string(),
+        code: format!("[{}]", error.code()),
+        message: error.format_description(),
+        position,
+        span: diagnostic_span,
+        formatted: None,
+    }]
 }
 
 // ============================================================================
@@ -834,7 +949,7 @@ fn strip_comments(query: &str) -> String {
         if c == '/' {
             if chars.peek() == Some(&'*') {
                 chars.next(); // consume '*'
-                // Skip until */
+                              // Skip until */
                 while let Some(c2) = chars.next() {
                     if c2 == '*' && chars.peek() == Some(&'/') {
                         chars.next(); // consume '/'
@@ -930,11 +1045,7 @@ fn detect_query_type_internal(query: &str) -> QueryTypeDetection {
     }
 
     // If we can't determine, return unknown
-    QueryTypeDetection {
-        query_type: DetectedQueryType::Unknown,
-        confident: false,
-        keyword: None,
-    }
+    QueryTypeDetection { query_type: DetectedQueryType::Unknown, confident: false, keyword: None }
 }
 
 /// Initialize panic hook for better error messages in browser console.

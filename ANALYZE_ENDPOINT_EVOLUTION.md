@@ -15,6 +15,7 @@
 | 3 | Semantic error diagnostics | ✅ Complete | 2024-12, leveraged TypeDBError trait |
 | 4 | Full schema validation (dry-run) | ✅ Complete | 2024-12, execute + rollback pattern |
 | V | Manual validation | ✅ Complete | 2024-12-10, all phases verified |
+| W | WASM support | ✅ Complete | 2024-12-11, works via wasm-playground |
 | T | Integration tests | 🔲 Pending | Step definitions ready, need feature files in typedb_behaviour |
 | 5 | Warnings & hints | 🔲 Future | — |
 | 6 | Completion data | 🔲 Future | — |
@@ -187,6 +188,57 @@ POST /v1/transactions/{id}/analyze (schema transaction)
 - ✅ Phase 2: Schema queries return structured schema representation
 - ✅ Phase 3: Semantic errors return diagnostics with position/span
 - ✅ Phase 4: Dry-run validates schema and rollback preserves transaction
+
+### WASM Support (Phase W) ✅ COMPLETE
+
+The analyze endpoint now works in WASM (browser-embedded) builds via the `wasm-playground` crate.
+
+**Implementation**: Added `analyze()` method to `TypeDBPlayground` that:
+1. Parses the query with `typeql::parse_query()`
+2. Opens a read transaction
+3. Calls `QueryManager::analyse()` for pipeline queries
+4. Returns structured `AnalyzeResult` with diagnostics
+
+**WASM-specific types** (in `wasm-playground/src/lib.rs`):
+```rust
+pub struct AnalyzeResult {
+    pub source: String,
+    pub diagnostics: Vec<AnalyzeDiagnostic>,
+    pub query_type: Option<String>,
+    pub valid: bool,
+}
+
+pub struct AnalyzeDiagnostic {
+    pub severity: String,
+    pub code: String,
+    pub message: String,
+    pub position: Option<DiagnosticPosition>,
+    pub span: Option<DiagnosticSpan>,
+    pub formatted: Option<String>,
+}
+```
+
+**JavaScript usage**:
+```javascript
+const result = db.analyze("match $x isa person;");
+if (result.valid) {
+    console.log("Query is valid!");
+} else {
+    result.diagnostics.forEach(d => console.error(d.message));
+}
+```
+
+**Key files**:
+- `wasm-playground/src/lib.rs` - `TypeDBPlayground::analyze()` method and types
+- `wasm-playground/www/index.html` - "Analyze" button in playground UI
+
+**Verification**:
+```bash
+cargo check -p wasm-playground --target wasm32-unknown-unknown  # ✅ passes
+cd wasm-playground && ./build.sh  # ✅ builds successfully
+```
+
+---
 
 ### Medium-term: Future Phases
 
