@@ -1,0 +1,25 @@
+[package]
+name = "typedb-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "WASM bindings for TypeDB embedded database"
+license = "MPL-2.0"
+keywords = ["typedb", "database", "wasm", "javascript", "typescript"]
+categories = ["database", "wasm", "web-programming"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["memory"]
+memory = ["typedb-embedded/memory"]
+
+[dependencies]
+typedb-embedded = { path = "../embedded", default-features = false }
+wasm-bindgen = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde-wasm-bindgen = "0.6"
+js-sys = "0.3"
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"

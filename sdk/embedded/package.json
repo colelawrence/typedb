@@ -1,0 +1,41 @@
+{
+  "name": "@typedb/embedded",
+  "version": "0.1.0",
+  "description": "TypeDB embedded database for JavaScript/TypeScript",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "wasm"
+  ],
+  "scripts": {
+    "build:wasm": "cd ../../typedb-wasm && wasm-pack build --target web --out-dir ../sdk/embedded/wasm",
+    "build:ts": "tsc",
+    "build": "npm run build:wasm && npm run build:ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "typedb",
+    "database",
+    "embedded",
+    "wasm",
+    "graph"
+  ],
+  "license": "MPL-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/typedb/typedb"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.14",
+    "typescript": "^5.8.3"
+  }
+}

@@ -1,0 +1,61 @@
+# TypeDB Embedded Testing
+#
+# Test utilities and scenarios for typedb-embedded.
+# Provides reusable test helpers and common test cases.
+#
+# Run tests:
+#   cargo test -p typedb-embedded-testing
+#
+# These tests verify:
+# - Database lifecycle (create in-memory)
+# - Transaction lifecycle (schema/write/read, commit/rollback)
+# - Schema operations (define types, attributes, relations)
+# - Data operations (insert, delete)
+# - Query execution (match, fetch)
+
+[package]
+name = "typedb-embedded-testing"
+edition = "2021"
+version = "0.0.0"
+
+[features]
+default = ["memory"]
+memory = ["typedb-embedded/memory"]
+
+[dependencies]
+typedb-embedded = { path = "../embedded", default-features = false }
+
+[lib]
+path = "lib.rs"
+
+[[test]]
+path = "tests/database_lifecycle.rs"
+name = "test_database_lifecycle"
+
+[[test]]
+path = "tests/transaction_lifecycle.rs"
+name = "test_transaction_lifecycle"
+
+[[test]]
+path = "tests/schema_operations.rs"
+name = "test_schema_operations"
+
+[[test]]
+path = "tests/data_operations.rs"
+name = "test_data_operations"
+
+[[test]]
+path = "tests/query_execution.rs"
+name = "test_query_execution"
+
+[[test]]
+path = "tests/wasm_time_compatibility.rs"
+name = "test_wasm_time_compatibility"
+
+[[test]]
+path = "tests/query_type_validation.rs"
+name = "test_query_type_validation"
+
+[[test]]
+path = "tests/column_ordering.rs"
+name = "test_column_ordering"

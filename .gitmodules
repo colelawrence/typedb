@@ -7,3 +7,6 @@
 [submodule "console"]
 	path = console
 	url = https://github.com/typedb/typedb-console.git
+[submodule ".context/livestore"]
+	path = .context/livestore
+	url = https://github.com/livestorejs/livestore.git

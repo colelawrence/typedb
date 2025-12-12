@@ -1,0 +1,27 @@
+# WASM Test Harness
+#
+# This crate provides a WASM-compatible test harness for running
+# TypeDB tests in a JavaScript runtime (Bun/Node/Browser).
+#
+# Build with wasm-pack:
+#   cd typedb-embedded-testing/harness && wasm-pack build --target web --out-dir pkg --release
+#
+# Run with Bun:
+#   bun run typedb-embedded-testing/runner/run-tests.ts
+
+[package]
+name = "typedb-embedded-testing-harness"
+edition = "2021"
+version = "0.0.0"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+path = "lib.rs"
+
+[features]
+default = ["memory"]
+memory = ["typedb-embedded/memory"]
+
+[dependencies]
+typedb-embedded = { path = "../../embedded", default-features = false }
+wasm-bindgen = "0.2"

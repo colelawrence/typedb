@@ -1,0 +1,13 @@
+{
+  "name": "wasm-tests-runner",
+  "version": "0.0.0",
+  "description": "Bun-based test runner for TypeDB WASM tests",
+  "type": "module",
+  "scripts": {
+    "test": "bun run run-tests.ts",
+    "build": "cd ../.. && cargo build -p wasm-tests-harness --target wasm32-unknown-unknown --release"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}

@@ -20,7 +20,10 @@
       "Bash(cat:*)",
       "Bash(rustc:*)",
       "Bash(RUSTFLAGS=\"--cap-lints=warn\" cargo test:*)",
-      "Bash(wc:*)"
+      "Bash(wc:*)",
+      "Bash(ls:*)",
+      "WebFetch(domain:wasm-bindgen.github.io)",
+      "Bash(cargo clippy:*)"
     ],
     "deny": [],
     "ask": []

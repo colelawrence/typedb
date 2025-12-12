@@ -5309,6 +5309,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "typedb-embedded"
+version = "0.1.0"
+dependencies = [
+ "answer",
+ "compiler",
+ "concept",
+ "database",
+ "encoding",
+ "error",
+ "executor",
+ "ir",
+ "lending_iterator",
+ "options",
+ "query",
+ "resource",
+ "storage",
+ "typeql",
+ "wasm-bindgen-test",
+]
+
+[[package]]
+name = "typedb-embedded-testing"
+version = "0.0.0"
+dependencies = [
+ "typedb-embedded",
+]
+
+[[package]]
+name = "typedb-embedded-testing-harness"
+version = "0.0.0"
+dependencies = [
+ "typedb-embedded",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "typedb-protocol"
 version = "0.0.0"
 source = "git+https://github.com/typedb/typedb-protocol?tag=3.7.0#3b75931f30f2b5cecf192515bb95071cd98a6e10"
@@ -5316,6 +5352,18 @@ dependencies = [
  "prost",
  "tonic",
  "tonic-build",
+]
+
+[[package]]
+name = "typedb-wasm"
+version = "0.1.0"
+dependencies = [
+ "js-sys",
+ "serde",
+ "serde-wasm-bindgen",
+ "typedb-embedded",
+ "wasm-bindgen",
+ "wasm-bindgen-test",
 ]
 
 [[package]]
@@ -5667,7 +5715,6 @@ dependencies = [
  "encoding",
  "error",
  "executor",
- "ir",
  "js-sys",
  "lending_iterator",
  "options",
@@ -5677,31 +5724,10 @@ dependencies = [
  "serde-wasm-bindgen",
  "serde_json",
  "storage",
+ "typedb-embedded",
  "typeql",
  "wasm-bindgen",
  "wasm-bindgen-test",
-]
-
-[[package]]
-name = "wasm-tests"
-version = "0.0.0"
-dependencies = [
- "answer",
- "compiler",
- "concept",
- "database",
- "encoding",
- "error",
- "executor",
- "function",
- "ir",
- "itertools 0.10.5",
- "lending_iterator",
- "options",
- "query",
- "resource",
- "storage",
- "typeql",
 ]
 
 [[package]]

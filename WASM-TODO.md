@@ -183,70 +183,68 @@ Propagating `memory` feature to crates that depend on storage/durability.
 - `cargo check -p concept --no-default-features --features memory` ✅
 - `cargo check -p concept --target wasm32-unknown-unknown --no-default-features --features memory` ✅
 
-### 3.3 Gate Server Module (Future)
-- [ ] **File**: `server/lib.rs` (MODIFY)
-- **Gate**: `#[cfg(not(target_arch = "wasm32"))]`
-- **Affects**: gRPC (tonic), HTTP (axum), TLS (rustls)
-- **Note**: Not needed for embedded WASM - can skip entirely
+### 3.3 Gate Server Module ⏭️ SKIPPED
+- [x] **File**: `server/lib.rs` - **Intentionally skipped**
+- **Reason**: The WASM entry point is `wasm-playground`, not the server binary. We don't attempt to make the server itself WASM-compatible.
 
-### 3.4 Gate Diagnostics (Future)
-- [ ] **File**: `diagnostics/lib.rs` (MODIFY)
-- **Gate**: Feature flag or arch gate
-- **Affects**: hyper server, HTTPS client, sentry
-- **Note**: Not needed for embedded WASM - can skip entirely
+### 3.4 Gate Diagnostics ⏭️ SKIPPED
+- [x] **File**: `diagnostics/lib.rs` - **Intentionally skipped**
+- **Reason**: Diagnostics (metrics, telemetry) are not needed for embedded browser use.
 
-### 3.5 Gate Main Binary (Future)
-- [ ] **File**: `main.rs` (MODIFY)
-- **Changes**: Conditional compilation for WASM vs native entry points
-- **Note**: Not needed for embedded WASM - can skip entirely
+### 3.5 Gate Main Binary ⏭️ SKIPPED
+- [x] **File**: `main.rs` - **Intentionally skipped**
+- **Reason**: `wasm-playground` serves as the WASM entry point. The main binary remains native-only.
 
 ---
 
-## Phase 4: Cargo Configuration
+## Phase 4: Cargo Configuration ✅ COMPLETE
 
-### 4.1 Root Cargo.toml Features
-- [ ] **File**: `Cargo.toml` (MODIFY)
-- **New features**:
+### 4.1 Root Cargo.toml Features ⏭️ SKIPPED
+- [x] **Status**: Intentionally skipped
+- **Reason**: The `wasm-playground` crate serves as the canonical WASM configuration. It correctly wires all dependencies with `default-features = false` and enables the `memory` feature across the crate tree. A root-level `wasm` feature would duplicate this responsibility and complicate the workspace feature graph.
+
+> The canonical WASM configuration is provided by the `wasm-playground` crate via its `memory` feature; a root-level `wasm` feature would duplicate this and complicate the workspace feature graph, so it is intentionally omitted.
+
+### 4.2 Storage Crate Features ✅ COMPLETE
+- [x] **File**: `storage/Cargo.toml` (MODIFIED)
+- **Implemented**:
   ```toml
   [features]
-  default = ["server", "rocksdb-storage", "wal-durability"]
-  server = []  # gates server/*
-  rocksdb-storage = ["storage/rocksdb"]
-  wal-durability = ["durability/wal"]
-  memory-storage = ["storage/memory"]
-  wasm = ["memory-storage"]  # convenience feature
-  ```
-
-### 4.2 Storage Crate Features
-- [ ] **File**: `storage/Cargo.toml` (MODIFY)
-- **Changes**:
-  ```toml
-  [features]
-  default = ["rocksdb"]
+  default = ["rocksdb", "wal"]
   rocksdb = ["dep:rocksdb"]
+  wal = ["durability/wal"]
   memory = []
-
-  [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-  rocksdb = { version = "0.23.0", optional = true }
   ```
+- RocksDB is optional via `optional = true`
+- `memory` feature enables in-memory backend
 
-### 4.3 Durability Crate Features
-- [ ] **File**: `durability/Cargo.toml` (MODIFY)
-- **Changes**: Gate `lz4` dependency, `std::fs` usage
+### 4.3 Durability Crate Features ✅ COMPLETE
+- [x] **File**: `durability/Cargo.toml` (MODIFIED)
+- **Implemented**: `wal = ["dep:lz4"]` feature gates WAL and lz4 compression
 
 ---
 
-## Phase 5: Validation
+## Phase 5: Validation ✅ COMPLETE
 
 ### 5.1 WASM Compilation Check
 ```bash
-cargo check --target wasm32-unknown-unknown \
-  --no-default-features \
-  --features wasm \
-  -p storage
+# Canonical WASM build (wasm-playground entry point)
+cargo check -p wasm-playground --target wasm32-unknown-unknown
+
+# Build with wasm-pack for browser deployment
+cd wasm-playground && wasm-pack build --target web --out-dir www/pkg --release
 ```
 
-### 5.2 Native Compilation Check (Regression)
+### 5.2 Library-Level WASM Checks (Optional)
+```bash
+# Individual crate verification
+cargo check -p storage   --no-default-features --features memory --target wasm32-unknown-unknown
+cargo check -p encoding  --no-default-features --features memory --target wasm32-unknown-unknown
+cargo check -p concept   --no-default-features --features memory --target wasm32-unknown-unknown
+cargo check -p database  --no-default-features --features memory --target wasm32-unknown-unknown
+```
+
+### 5.3 Native Compilation Check (Regression)
 ```bash
 cargo check  # Should still work with defaults
 cargo test   # Existing tests should pass
@@ -276,10 +274,12 @@ cargo test   # Existing tests should pass
 | `encoding/encoding.rs` | MODIFY | 3.1 | ✅ |
 | `concept/Cargo.toml` | MODIFY | 3.2 | ✅ |
 | `concept/thing/statistics.rs` | MODIFY | 3.2 | ✅ |
-| `server/lib.rs` | MODIFY | 3.3 | skipped |
-| `diagnostics/lib.rs` | MODIFY | 3.4 | skipped |
-| `main.rs` | MODIFY | 3.5 | skipped |
-| `Cargo.toml` | MODIFY | 4.1 | pending |
+| `server/lib.rs` | - | 3.3 | ⏭️ skipped |
+| `diagnostics/lib.rs` | - | 3.4 | ⏭️ skipped |
+| `main.rs` | - | 3.5 | ⏭️ skipped |
+| `Cargo.toml` (root) | - | 4.1 | ⏭️ skipped |
+| `wasm-playground/Cargo.toml` | CREATE | - | ✅ (WASM entry point) |
+| `wasm-playground/src/lib.rs` | CREATE | - | ✅ (WASM API) |
 
 ---
 
@@ -302,19 +302,24 @@ Need abstract batch builder or per-backend batch type.
 
 ---
 
-## Open Questions
+## Open Questions ✅ RESOLVED
 
-1. **SpilloverCache**: Uses RocksDB for overflow. Options:
-   - Disable spillover in WASM (memory-only)
-   - Use IndexedDB (future enhancement)
+For the **current WASM MVP**, these are resolved by the memory-only mode:
 
-2. **Checkpointing**: RocksDB-specific. Options:
-   - No-op for in-memory mode
-   - Serialization to blob (future)
+1. **SpilloverCache**: ✅ Resolved
+   - RocksDB-backed spillover is compiled out when `rocksdb` feature is disabled
+   - For WASM/memory builds, no spillover occurs (all data stays in memory)
+   - Future enhancement: IndexedDB-based overflow (not required for MVP)
 
-3. **Compression**: `lz4` crate uses C bindings. Options:
-   - `lz4_flex` pure Rust alternative
-   - Skip compression for in-memory mode
+2. **Checkpointing**: ✅ Resolved
+   - In `memory` mode, checkpointing is a no-op (no RocksDB, no WAL)
+   - `checkpoint()` returns immediately without persistence
+   - Future enhancement: Serialize to IndexedDB for page-reload survival (not required for MVP)
+
+3. **Compression**: ✅ Resolved
+   - `lz4` is gated behind `durability/wal` feature
+   - WASM builds never enable `wal`, so `lz4` is never compiled
+   - Future enhancement: Switch to `lz4_flex` for native builds (optional optimization)
 
 ---
 
@@ -334,6 +339,10 @@ Need abstract batch builder or per-backend batch type.
 | 2025-12-10 | 2.x | ✅ | **Phase 2 Complete!** Durability abstraction done. `lz4` is now optional via `wal` feature. |
 | 2025-12-10 | 3.1 | ✅ | Feature-gated encoding crate with `rocksdb`/`memory` features. WASM compiles. |
 | 2025-12-10 | 3.2 | ✅ | Feature-gated concept crate. Split statistics.rs `may_synchronise()` for wal/no-wal. WASM compiles. |
+| 2025-12-12 | 3.3-3.5 | ⏭️ | Marked server/diagnostics/main as intentionally skipped (not needed for wasm-playground). |
+| 2025-12-12 | 4.1-4.3 | ✅ | Marked Phase 4 complete. Root Cargo.toml skipped; storage/durability features already implemented. |
+| 2025-12-12 | 5.x | ✅ | Updated validation commands. Added wasm-playground as canonical WASM build target. |
+| 2025-12-12 | ALL | ✅ | **WASM MVP Complete!** wasm-playground provides full TypeDB query engine in browser. |
 
 ---
 
@@ -376,36 +385,288 @@ This is intentional - it allows the MVCC machinery to work unchanged while data 
 
 ---
 
-## Next Steps: Phase 4+
+## Implementation Status: ✅ COMPLETE
 
-**Phase 1 (Storage Layer Abstraction), Phase 2 (Durability Abstraction), and Phase 3.1-3.2 (Encoding/Concept) are complete.**
+**All phases required for browser-embedded TypeDB are complete.**
 
-### WASM Compilation Status
+### What's Working
 
-**Crates that compile for wasm32-unknown-unknown:**
+The `wasm-playground` crate provides a full TypeDB query engine in the browser:
+- Schema definition (`define`, `redefine`, `undefine`)
+- Data operations (`insert`, `delete`, `update`)
+- Queries (`match`, `fetch`)
+- Query analysis with diagnostics (`analyze()`)
+- TypeQL parsing and compilation
+
+### WASM Compilation
+
 ```bash
-cargo check -p durability --target wasm32-unknown-unknown --no-default-features  # ✅
-cargo check -p storage --target wasm32-unknown-unknown --no-default-features --features memory  # ✅
-cargo check -p encoding --target wasm32-unknown-unknown --no-default-features --features memory  # ✅
-cargo check -p concept --target wasm32-unknown-unknown --no-default-features --features memory  # ✅
+# Canonical WASM build
+cargo check -p wasm-playground --target wasm32-unknown-unknown  # ✅
+
+# Build for browser
+cd wasm-playground && wasm-pack build --target web --out-dir www/pkg --release
 ```
 
-### Remaining Work
+### Feature Flag Architecture
 
-To enable full WASM compilation of query/database layers:
+The two-mode story (`rocksdb` vs `memory`) is cleanly implemented:
 
-1. **Continue feature propagation** (Phase 4.x):
-   - Add `memory` feature to: `database`, `query`, `executor`, `function`, etc.
-   - Each crate's Cargo.toml needs `rocksdb` and `memory` features forwarding to dependencies
-   - Pattern established: `rocksdb = ["storage/rocksdb", "storage/wal", "encoding/rocksdb", ...]`
+| Mode | Storage | Durability | Use Case |
+|------|---------|------------|----------|
+| `rocksdb` (default) | RocksDB | WAL | Production server |
+| `memory` | BTreeMap | NoopDurabilityClient | WASM / ephemeral |
 
-2. **Database crate considerations**:
-   - Currently hardcoded to `Database<WALClient>`
-   - For WASM, may want `MVCCStorage` directly with `NoopDurabilityClient`
-   - Or make Database generic over durability client
+`wasm-playground` selects `memory` mode across all dependencies via:
+```toml
+[features]
+default = ["memory"]
+memory = ["database/memory", "query/memory", "storage/memory", ...]
+```
 
-3. **WASM entry point** (Final phase):
-   - Create a minimal crate that exposes TypeDB query API for WASM
-   - Compile with `--features memory --no-default-features`
+### Future Enhancements (Not Required for MVP)
 
-Server/diagnostics gates (3.3-3.5) can be skipped entirely - not needed for embedded WASM use.
+These are optional improvements tracked separately:
+
+1. **IndexedDB persistence** - Survive page reloads by serializing to IndexedDB
+2. **Web Workers** - Run queries off the main thread
+3. **Streaming results** - Return results incrementally for large queries
+4. **SharedArrayBuffer** - Multi-tab database sharing
+
+See `docs/wasm.md` for user-facing documentation.
+
+---
+
+## Phase 6: Embeddable Rust Library Crate
+
+> **Goal**: Create `typedb-embedded` crate that Rust developers can use as a dependency in their own WASM-targeting projects.
+
+**Difference from `wasm-playground`**:
+- `wasm-playground`: `cdylib` with wasm-bindgen for JavaScript interop
+- `typedb-embedded`: Pure `rlib` with Rust API, no JS bindings
+
+### 6.1 Create Crate Skeleton ✅ COMPLETE
+- [x] **File**: `embedded/Cargo.toml` (CREATE)
+- [x] **File**: `embedded/src/lib.rs` (CREATE)
+- **Requirements**:
+  - `crate-type = ["rlib"]` (no cdylib)
+  - No wasm-bindgen dependency
+  - `default-features = false` on all TypeDB deps
+  - Enable `memory` feature across dependency tree
+
+**Verification Gate**:
+```bash
+cargo check -p typedb-embedded --target wasm32-unknown-unknown  # ✅ passes
+```
+
+### 6.2 Define Public API Surface ✅ COMPLETE
+- [x] **File**: `embedded/src/lib.rs` (MODIFY)
+- [x] **File**: `embedded/src/database_api.rs` (CREATE)
+- [x] **File**: `embedded/src/transaction.rs` (CREATE)
+- [x] **File**: `embedded/src/error.rs` (CREATE)
+- **Exports**:
+  - `Database` - create/open in-memory databases
+  - `Transaction` / `TransactionRead` / `TransactionWrite` / `TransactionSchema`
+  - `QueryResult` - structured query results
+  - `TypeDBError` - unified error type
+  - Re-export essential types from `answer`, `encoding::value`
+
+**API Design**:
+```rust
+use typedb_embedded::{Database, Options};
+
+let db = Database::new("mydb")?;
+
+// Schema transaction
+let tx = db.transaction_schema(Options::default())?;
+tx.execute("define entity person owns name; attribute name value string;")?;
+tx.commit()?;
+
+// Write transaction
+let tx = db.transaction_write(Options::default())?;
+tx.execute("insert $p isa person, has name \"Alice\";")?;
+tx.commit()?;
+
+// Read transaction
+let tx = db.transaction_read(Options::default())?;
+let results = tx.query("match $p isa person, has name $n;")?;
+for row in results {
+    println!("{:?}", row);
+}
+```
+
+**Verification Gate**:
+```bash
+cargo doc -p typedb-embedded --no-deps  # ✅ Docs generate
+```
+
+### 6.3 Implement Transaction Wrappers ✅ COMPLETE
+- [x] **File**: `embedded/src/transaction.rs` (MODIFY)
+- **Purpose**: Wrap internal transaction types with ergonomic API
+- **Key methods**:
+  - `execute(&self, query: &str) -> Result<usize, Error>` (write)
+  - `execute(&mut self, query: &str) -> Result<(), Error>` (schema)
+  - `query(&self, query: &str) -> Result<QueryResultIterator, Error>` (read)
+  - `commit(self) -> Result<(), Error>`
+- **Note**: Write transactions auto-commit on execute due to internal design
+
+**Verification Gate**:
+```bash
+cargo test -p typedb-embedded --lib  # ✅ passes
+```
+
+### 6.4 Implement QueryResult Iterator ✅ COMPLETE
+- [x] **File**: `embedded/src/result.rs` (CREATE)
+- **Purpose**: Ergonomic result iteration without exposing internals
+- **Types**:
+  - `QueryResultIterator` - iterable result set
+  - `Row` - single result row with `get(variable)` method
+  - `Value` - type-safe value enum (Entity, Relation, Attribute, etc.)
+  - `AttributeValue` - primitive values (String, Integer, Double, etc.)
+
+**Verification Gate**:
+```bash
+cargo test -p typedb-embedded --lib  # ✅ passes
+```
+
+### 6.5 Add Integration Tests ✅ COMPLETE
+- [x] **File**: `embedded/tests/integration.rs` (CREATE)
+- **Tests** (10 total, all passing):
+  - `test_create_database`
+  - `test_define_schema` / `test_define_schema_with_attributes`
+  - `test_insert_and_query` / `test_multiple_inserts`
+  - `test_schema_error` / `test_parse_error`
+  - `test_read_transaction_cannot_write`
+  - `test_multiple_databases`
+  - `test_schema_rollback`
+
+**Verification Gate**:
+```bash
+cargo test -p typedb-embedded  # ✅ 10 tests pass
+```
+
+### 6.6 WASM Integration Test ⬚ TODO
+
+**Revised Approach**: Instead of wasm-pack test, we use a Bun-based test runner that:
+1. Loads the WASM module directly
+2. Calls exported test functions
+3. Reports results in standard test format
+
+This validates the full WASM pipeline in a real JS runtime.
+
+#### 6.6a Architecture Plan
+
+**Three-part approach:**
+
+1. **Refactor `wasm-playground`** to use `typedb-embedded` internally
+   - Validates that the embedded API is complete enough for real use
+   - Reduces code duplication between the two crates
+
+2. **Create `wasm-tests` crate** (`wasm-tests/`)
+   - Pure WASM crate with test harness exports
+   - Exports: `test_count() -> u32`, `test_name(n: u32) -> *const u8`, `run_test(n: u32) -> bool`
+   - Each test exercises `typedb-embedded` functionality
+
+3. **Bun test runner** (`wasm-tests/runner/`)
+   - TypeScript script that loads WASM and runs tests
+   - Reports results in TAP or similar format
+   - Can be run in CI
+
+**Crate Structure:**
+```
+wasm-tests/
+├── Cargo.toml          # cdylib, depends on typedb-embedded
+├── src/lib.rs          # Test harness with #[no_mangle] exports
+├── runner/
+│   ├── package.json    # Bun project
+│   ├── run-tests.ts    # Loads WASM, runs tests
+│   └── tsconfig.json
+└── build.sh            # cargo build --target wasm32 + bun run
+```
+
+**Verification Gate**:
+```bash
+cd wasm-tests && ./build.sh && bun run runner/run-tests.ts
+```
+
+#### 6.6b Refactor wasm-playground ✅ COMPLETE
+- [x] Replace direct database/query/storage imports with `typedb-embedded`
+- [x] Simplify internal implementation to use embedded API
+- [x] Verify `wasm-pack build` still works
+
+**Implementation Notes**:
+- `TypeDBPlayground` now wraps `typedb-embedded::Database` for schema/write/read operations
+- Added conversion functions from `typedb_embedded::Value` to `RichValue` types
+- Kept `analyze()` functionality using raw database access (typedb-embedded doesn't expose this)
+- Uses a separate "analyze" database for query analysis (separate from the main database)
+- Verified: `cargo check -p wasm-playground --target wasm32-unknown-unknown` ✅
+
+#### 6.6c Create wasm-tests crate ✅ COMPLETE
+- [x] **File**: `wasm-tests/Cargo.toml`
+- [x] **File**: `wasm-tests/lib.rs` - test harness with `TestDatabase` helper
+- [x] 7 test files with 69 total tests:
+  - `tests/database_lifecycle.rs` - database creation/cleanup
+  - `tests/transaction_lifecycle.rs` - transaction open/commit/rollback
+  - `tests/schema_operations.rs` - entity, attribute, relation definitions
+  - `tests/data_operations.rs` - insert, delete, update
+  - `tests/query_execution.rs` - match queries, joins, comparisons
+  - `tests/wasm_time_compatibility.rs` - profiling code compatibility
+  - `tests/query_type_validation.rs` - wrong query type error handling
+
+**Verification Gates**:
+```bash
+cargo test -p wasm-tests  # ✅ 69 tests pass
+cargo check -p wasm-tests --target wasm32-unknown-unknown  # ✅
+```
+
+#### 6.6d Create Bun test runner ✅ COMPLETE
+- [x] **File**: `wasm-tests/harness/Cargo.toml` - cdylib with wasm-bindgen
+- [x] **File**: `wasm-tests/harness/lib.rs` - 10 tests with `#[wasm_bindgen]` exports
+- [x] **File**: `wasm-tests/runner/package.json`
+- [x] **File**: `wasm-tests/runner/run-tests.ts` - loads wasm-pack output, runs tests
+- [x] **File**: `wasm-tests/build.sh` - builds with wasm-pack and runs tests
+
+**Tests included:**
+- `create_database` - Database creation
+- `define_simple_schema` - Simple entity definition
+- `define_complex_schema` - Entity, attribute, relation definitions
+- `insert_and_query` - Insert data and query it back
+- `multiple_inserts` - Multiple write transactions
+- `delete_entity` - Delete operations
+- `query_with_filter` - Queries with comparisons
+- `transaction_rollback` - Schema rollback
+- `error_handling` - Error on invalid operations
+- `multiple_databases` - Schema isolation
+
+**Verification Gate:**
+```bash
+cd wasm-tests && ./build.sh --verbose  # ✅ 10/10 tests pass
+```
+
+### 6.7 Documentation & Examples ✅ COMPLETE
+- [x] **File**: `embedded/README.md` (CREATE)
+- [x] **File**: `embedded/examples/basic.rs` (CREATE)
+- [ ] **File**: `docs/embedded.md` (CREATE) - optional, README sufficient for now
+- **Content**:
+  - Getting started guide
+  - API reference
+  - WASM compilation instructions
+
+**Verification Gate**:
+```bash
+cargo run --example basic -p typedb-embedded  # ✅ runs successfully
+```
+
+---
+
+## Phase 6 Checklist
+
+| Step | Description | Status | Gate |
+|------|-------------|--------|------|
+| 6.1 | Crate skeleton | ✅ | `cargo check --target wasm32` |
+| 6.2 | Public API surface | ✅ | `cargo doc` |
+| 6.3 | Transaction wrappers | ✅ | `cargo test --lib` |
+| 6.4 | QueryResult iterator | ✅ | `cargo test --lib` |
+| 6.5 | Integration tests | ✅ | `cargo test` (10 pass) |
+| 6.6 | WASM integration test | ✅ | `cd wasm-tests && ./build.sh` (10 pass) |
+| 6.7 | Documentation | ✅ | `cargo run --example` |
