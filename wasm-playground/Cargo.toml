@@ -10,13 +10,13 @@ crate-type = ["cdylib", "rlib"]
 [features]
 default = ["memory"]
 memory = [
+    "typedb-embedded/memory",
     "database/memory",
     "query/memory",
     "storage/memory",
     "encoding/memory",
     "concept/memory",
     "answer/memory",
-    "ir/memory",
     "compiler/memory",
     "executor/memory",
 ]
@@ -29,14 +29,16 @@ serde-wasm-bindgen = "0.6"
 js-sys = "0.3"
 console_error_panic_hook = "0.1"
 
-# TypeDB crates
+# TypeDB embedded library (provides core database functionality)
+typedb-embedded = { path = "../embedded", default-features = false }
+
+# Additional TypeDB crates needed for analyze() and internal APIs
 database = { path = "../database", default-features = false }
 query = { path = "../query", default-features = false }
 storage = { path = "../storage", default-features = false }
 encoding = { path = "../encoding", default-features = false }
 concept = { path = "../concept", default-features = false }
 answer = { path = "../answer", default-features = false }
-ir = { path = "../ir", default-features = false }
 compiler = { path = "../compiler", default-features = false }
 executor = { path = "../executor", default-features = false }
 options = { path = "../common/options", default-features = false }

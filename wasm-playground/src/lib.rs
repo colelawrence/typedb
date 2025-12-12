@@ -7,7 +7,7 @@
 //! TypeDB Browser Playground
 //!
 //! This crate provides WebAssembly bindings for running TypeDB entirely in the browser.
-//! It wraps the in-memory TypeDB database and exposes a simple API for:
+//! It wraps the `typedb-embedded` library and exposes a simple API for:
 //! - Creating databases
 //! - Defining schemas
 //! - Inserting data
@@ -17,20 +17,44 @@
 
 use std::sync::Arc;
 
-use answer::{variable_value::VariableValue, Thing, Type};
-use concept::thing::ThingAPI;
-use database::{
-    transaction::{TransactionRead, TransactionSchema, TransactionWrite},
-    Database,
-};
-use encoding::value::value::Value;
-use executor::ExecutionInterrupt;
-use lending_iterator::LendingIterator;
-use options::TransactionOptions;
-use resource::profile::{CommitProfile, StorageCounters};
 use serde::Serialize;
-use storage::{durability_client::NoopDurabilityClient, snapshot::CommittableSnapshot};
+use storage::durability_client::NoopDurabilityClient;
 use wasm_bindgen::prelude::*;
+
+// ============================================================================
+// Console Logging (wasm-bindgen bindings)
+// ============================================================================
+
+#[wasm_bindgen]
+extern "C" {
+    /// Binding to `console.log`
+    #[wasm_bindgen(js_namespace = console)]
+    fn log(s: &str);
+
+    /// Binding to `console.debug`
+    #[wasm_bindgen(js_namespace = console, js_name = debug)]
+    fn debug(s: &str);
+}
+
+/// Log a message to the browser console with a "[TypeDB]" prefix
+macro_rules! console_log {
+    ($($arg:tt)*) => {
+        log(&format!("[TypeDB] {}", format_args!($($arg)*)));
+    };
+}
+
+/// Log debug/trace level messages (more verbose)
+macro_rules! console_debug {
+    ($($arg:tt)*) => {
+        debug(&format!("[TypeDB:debug] {}", format_args!($($arg)*)));
+    };
+}
+
+// Re-export the embedded Database for internal use
+use typedb_embedded::{
+    AttributeValue as EmbeddedAttributeValue, Database as EmbeddedDatabase, Options,
+    Value as EmbeddedValue,
+};
 
 // ============================================================================
 // Rich Result Types for Beautiful Rendering
@@ -185,9 +209,13 @@ pub struct ErrorLocation {
 // ============================================================================
 
 /// A TypeDB database session for the browser playground.
+/// Wraps `typedb-embedded::Database` and provides JS-friendly API.
 #[wasm_bindgen]
 pub struct TypeDBPlayground {
-    database: Arc<Database<NoopDurabilityClient>>,
+    /// The embedded database (used for schema/write/read operations)
+    embedded_db: EmbeddedDatabase,
+    /// Raw database access for analyze() which needs internal APIs
+    raw_db: Arc<database::Database<NoopDurabilityClient>>,
 }
 
 #[wasm_bindgen]
@@ -195,10 +223,13 @@ impl TypeDBPlayground {
     /// Create a new TypeDB playground with an in-memory database.
     #[wasm_bindgen(constructor)]
     pub fn new(name: &str) -> Result<TypeDBPlayground, JsError> {
-        let database = Database::create_in_memory(name)
-            .map_err(|e| JsError::new(&format!("Failed to create database: {:?}", e)))?;
+        let embedded_db = EmbeddedDatabase::new(name)
+            .map_err(|e| JsError::new(&format!("Failed to create database: {}", e)))?;
 
-        Ok(TypeDBPlayground { database: Arc::new(database) })
+        let raw_db = database::Database::create_in_memory(format!("{}_analyze", name))
+            .map_err(|e| JsError::new(&format!("Failed to create analyze database: {:?}", e)))?;
+
+        Ok(TypeDBPlayground { embedded_db, raw_db: Arc::new(raw_db) })
     }
 
     /// Execute a schema definition query.
@@ -276,7 +307,7 @@ impl TypeDBPlayground {
     #[wasm_bindgen]
     pub fn info(&self) -> JsValue {
         let info = serde_json::json!({
-            "name": self.database.name(),
+            "name": self.embedded_db.name(),
             "status": "active"
         });
         serde_wasm_bindgen::to_value(&info).unwrap_or(JsValue::NULL)
@@ -292,21 +323,28 @@ impl TypeDBPlayground {
 }
 
 // ============================================================================
-// Internal Implementation
+// Internal Implementation using typedb-embedded
 // ============================================================================
 
 impl TypeDBPlayground {
     fn define_schema_internal(&self, schema: &str) -> OperationResult {
-        let tx = match TransactionSchema::open(self.database.clone(), TransactionOptions::default()) {
-            Ok(tx) => tx,
+        console_log!("define_schema() called");
+        console_log!("  Input query:\n{}", schema);
+
+        let mut tx = match self.embedded_db.transaction_schema(Options::default()) {
+            Ok(tx) => {
+                console_log!("  Opened schema transaction");
+                tx
+            }
             Err(e) => {
+                console_log!("  ERROR: Failed to open schema transaction: {}", e);
                 return OperationResult {
                     success: false,
                     message: "Failed to open schema transaction".to_string(),
                     row_count: None,
                     error: Some(QueryError {
                         kind: ErrorKind::TransactionError,
-                        message: format!("{:?}", e),
+                        message: format!("{}", e),
                         location: None,
                         hint: Some("Try closing any other open transactions".to_string()),
                     }),
@@ -314,285 +352,193 @@ impl TypeDBPlayground {
             }
         };
 
-        match self.execute_schema(tx, schema) {
-            Ok(()) => OperationResult {
-                success: true,
-                message: "Schema defined successfully".to_string(),
-                row_count: None,
-                error: None,
-            },
-            Err(e) => OperationResult {
+        if let Err(e) = tx.execute(schema) {
+            console_log!("  ERROR: Schema execution failed: {}", e);
+            return OperationResult {
                 success: false,
                 message: "Schema definition failed".to_string(),
                 row_count: None,
-                error: Some(e),
-            },
+                error: Some(convert_embedded_error(e)),
+            };
+        }
+        console_log!("  Schema executed successfully");
+
+        match tx.commit() {
+            Ok(()) => {
+                console_log!("  Schema committed successfully");
+                OperationResult {
+                    success: true,
+                    message: "Schema defined successfully".to_string(),
+                    row_count: None,
+                    error: None,
+                }
+            }
+            Err(e) => {
+                console_log!("  ERROR: Schema commit failed: {}", e);
+                OperationResult {
+                    success: false,
+                    message: "Schema commit failed".to_string(),
+                    row_count: None,
+                    error: Some(convert_embedded_error(e)),
+                }
+            }
         }
     }
 
     fn write_internal(&self, query: &str) -> OperationResult {
-        let tx = match TransactionWrite::open(self.database.clone(), TransactionOptions::default()) {
-            Ok(tx) => tx,
+        console_log!("write() called");
+        console_log!("  Input query:\n{}", query);
+
+        let tx = match self.embedded_db.transaction_write(Options::default()) {
+            Ok(tx) => {
+                console_log!("  Opened write transaction");
+                tx
+            }
             Err(e) => {
+                console_log!("  ERROR: Failed to open write transaction: {}", e);
                 return OperationResult {
                     success: false,
                     message: "Failed to open write transaction".to_string(),
                     row_count: None,
-                    error: Some(QueryError {
-                        kind: ErrorKind::TransactionError,
-                        message: format!("{:?}", e),
-                        location: None,
-                        hint: None,
-                    }),
+                    error: Some(convert_embedded_error(e)),
                 }
             }
         };
 
-        match self.execute_write(tx, query) {
-            Ok(count) => OperationResult {
-                success: true,
-                message: format!("{} row{} affected", count, if count == 1 { "" } else { "s" }),
-                row_count: Some(count),
-                error: None,
-            },
-            Err(e) => OperationResult {
-                success: false,
-                message: "Write operation failed".to_string(),
-                row_count: None,
-                error: Some(e),
-            },
+        match tx.execute(query) {
+            Ok(count) => {
+                console_log!("  Write executed successfully: {} rows affected", count);
+                OperationResult {
+                    success: true,
+                    message: format!("{} row{} affected", count, if count == 1 { "" } else { "s" }),
+                    row_count: Some(count),
+                    error: None,
+                }
+            }
+            Err(e) => {
+                console_log!("  ERROR: Write execution failed: {}", e);
+                OperationResult {
+                    success: false,
+                    message: "Write operation failed".to_string(),
+                    row_count: None,
+                    error: Some(convert_embedded_error(e)),
+                }
+            }
         }
     }
 
     fn query_internal(&self, query: &str) -> QueryResult {
-        let tx = match TransactionRead::open(self.database.clone(), TransactionOptions::default()) {
-            Ok(tx) => tx,
+        console_log!("query() called");
+        console_log!("  Input query:\n{}", query);
+
+        let tx = match self.embedded_db.transaction_read(Options::default()) {
+            Ok(tx) => {
+                console_log!("  Opened read transaction");
+                tx
+            }
             Err(e) => {
+                console_log!("  ERROR: Failed to open read transaction: {}", e);
                 return QueryResult {
                     success: false,
                     columns: vec![],
                     rows: vec![],
                     row_count: 0,
-                    error: Some(QueryError {
-                        kind: ErrorKind::TransactionError,
-                        message: format!("{:?}", e),
-                        location: None,
-                        hint: None,
-                    }),
+                    error: Some(convert_embedded_error(e)),
                 }
             }
         };
 
-        match self.execute_query(&tx, query) {
-            Ok((columns, rows)) => QueryResult { success: true, row_count: rows.len(), columns, rows, error: None },
-            Err(e) => QueryResult { success: false, columns: vec![], rows: vec![], row_count: 0, error: Some(e) },
-        }
-    }
-
-    fn execute_schema(&self, mut tx: TransactionSchema<NoopDurabilityClient>, schema: &str) -> Result<(), QueryError> {
-        let structure = typeql::parse_query(schema).map_err(|e| parse_typeql_error(e, schema))?.into_structure();
-
-        let define = match structure {
-            typeql::query::QueryStructure::Schema(schema_query) => schema_query,
-            typeql::query::QueryStructure::Pipeline(_) => {
-                return Err(QueryError {
-                    kind: ErrorKind::TypeError,
-                    message: "Pipeline queries (match/insert/delete) cannot be executed in a schema transaction"
-                        .to_string(),
-                    location: None,
-                    hint: Some(
-                        "Use write() or query() for data operations, or execute() which auto-detects query type"
-                            .to_string(),
-                    ),
-                });
+        let result_iter = match tx.query(query) {
+            Ok(iter) => {
+                console_log!("  Query executed, processing results...");
+                iter
+            }
+            Err(e) => {
+                console_log!("  ERROR: Query execution failed: {}", e);
+                return QueryResult {
+                    success: false,
+                    columns: vec![],
+                    rows: vec![],
+                    row_count: 0,
+                    error: Some(convert_embedded_error(e)),
+                }
             }
         };
 
-        let snapshot = tx.snapshot.as_mut().ok_or_else(|| QueryError {
-            kind: ErrorKind::InternalError,
-            message: "Snapshot not available".to_string(),
-            location: None,
-            hint: None,
-        })?;
-
-        tx.query_manager
-            .execute_schema(snapshot, &tx.type_manager, &tx.thing_manager, &tx.function_manager, define, schema)
-            .map_err(|e| QueryError {
-                kind: ErrorKind::SchemaError,
-                message: format!("{:?}", e),
-                location: None,
-                hint: Some("Check that all referenced types exist".to_string()),
-            })?;
-
-        let (_, result) = tx.commit();
-        result.map_err(|e| QueryError {
-            kind: ErrorKind::TransactionError,
-            message: format!("Commit failed: {:?}", e),
-            location: None,
-            hint: None,
-        })
-    }
-
-    fn execute_write(&self, tx: TransactionWrite<NoopDurabilityClient>, query: &str) -> Result<usize, QueryError> {
-        let structure = typeql::parse_query(query).map_err(|e| parse_typeql_error(e, query))?.into_structure();
-
-        let parsed = match structure {
-            typeql::query::QueryStructure::Pipeline(pipeline) => pipeline,
-            typeql::query::QueryStructure::Schema(_) => {
-                return Err(QueryError {
-                    kind: ErrorKind::TypeError,
-                    message: "Schema queries (define/undefine/redefine) cannot be executed in a write transaction"
-                        .to_string(),
-                    location: None,
-                    hint: Some(
-                        "Use define_schema() for schema modifications, or execute() which auto-detects query type"
-                            .to_string(),
-                    ),
-                });
-            }
-        };
-
-        let snapshot = tx.snapshot.into_inner();
-        let pipeline = tx
-            .query_manager
-            .prepare_write_pipeline(
-                snapshot,
-                &tx.type_manager,
-                tx.thing_manager.clone(),
-                &tx.function_manager,
-                &parsed,
-                query,
-            )
-            .map_err(|(_, e)| QueryError {
-                kind: ErrorKind::TypeError,
-                message: format!("{:?}", e),
-                location: None,
-                hint: Some("Check that all types and attributes are defined in the schema".to_string()),
-            })?;
-
-        let (mut iterator, context) =
-            pipeline.into_rows_iterator(ExecutionInterrupt::new_uninterruptible()).map_err(|(e, _)| QueryError {
-                kind: ErrorKind::DataError,
-                message: format!("{:?}", e),
-                location: None,
-                hint: None,
-            })?;
-
-        let mut count = 0;
-        while let Some(result) = iterator.next() {
-            result.map_err(|e| QueryError {
-                kind: ErrorKind::DataError,
-                message: format!("{:?}", e),
-                location: None,
-                hint: None,
-            })?;
-            count += 1;
-        }
-
-        let snapshot = Arc::try_unwrap(context.snapshot).map_err(|_| QueryError {
-            kind: ErrorKind::InternalError,
-            message: "Snapshot still in use".to_string(),
-            location: None,
-            hint: None,
-        })?;
-        snapshot.commit(&mut CommitProfile::DISABLED).map_err(|e| QueryError {
-            kind: ErrorKind::TransactionError,
-            message: format!("Commit failed: {:?}", e),
-            location: None,
-            hint: None,
-        })?;
-
-        Ok(count)
-    }
-
-    fn execute_query(
-        &self,
-        tx: &TransactionRead<NoopDurabilityClient>,
-        query: &str,
-    ) -> Result<(Vec<String>, Vec<ResultRow>), QueryError> {
-        let structure = typeql::parse_query(query).map_err(|e| parse_typeql_error(e, query))?.into_structure();
-
-        let parsed = match structure {
-            typeql::query::QueryStructure::Pipeline(pipeline) => pipeline,
-            typeql::query::QueryStructure::Schema(_) => {
-                return Err(QueryError {
-                    kind: ErrorKind::TypeError,
-                    message: "Schema queries (define/undefine/redefine) cannot be executed in a read transaction"
-                        .to_string(),
-                    location: None,
-                    hint: Some(
-                        "Use define_schema() for schema modifications, or execute() which auto-detects query type"
-                            .to_string(),
-                    ),
-                });
-            }
-        };
-
-        let snapshot = tx.snapshot.clone_inner();
-        let pipeline = tx
-            .query_manager
-            .prepare_read_pipeline(
-                snapshot,
-                &tx.type_manager,
-                tx.thing_manager.clone(),
-                &tx.function_manager,
-                &parsed,
-                query,
-            )
-            .map_err(|e| QueryError {
-                kind: ErrorKind::TypeError,
-                message: format!("{:?}", e),
-                location: None,
-                hint: Some("Check that all types exist in the schema".to_string()),
-            })?;
-
-        // Get variable names from the pipeline's rows_positions
-        let var_names = extract_variable_names_from_positions(pipeline.rows_positions());
-
-        let (mut iterator, context) =
-            pipeline.into_rows_iterator(ExecutionInterrupt::new_uninterruptible()).map_err(|(e, _)| QueryError {
-                kind: ErrorKind::DataError,
-                message: format!("{:?}", e),
-                location: None,
-                hint: None,
-            })?;
+        // Get column names in the correct order from the iterator
+        let columns: Vec<String> = result_iter.columns().iter().map(|k| format!("${}", k)).collect();
+        console_log!("  Columns: {:?}", columns);
 
         let mut rows = Vec::new();
-        while let Some(result) = iterator.next() {
-            let row = result.map_err(|e| QueryError {
-                kind: ErrorKind::DataError,
-                message: format!("{:?}", e),
-                location: None,
-                hint: None,
-            })?;
 
-            // Convert each value to a rich representation
-            let values: Vec<ColumnValue> = row
-                .row()
+        for (row_idx, row_result) in result_iter.enumerate() {
+            let row = match row_result {
+                Ok(r) => r,
+                Err(e) => {
+                    console_log!("  ERROR: Failed to read row {}: {}", row_idx, e);
+                    return QueryResult {
+                        success: false,
+                        columns: columns.clone(),
+                        rows,
+                        row_count: 0,
+                        error: Some(convert_embedded_error(e)),
+                    }
+                }
+            };
+
+            // Log raw row data
+            console_debug!("  Row {}: raw data = {:?}", row_idx, row);
+
+            // Convert row to rich values IN COLUMN ORDER (not HashMap iteration order)
+            let values: Vec<ColumnValue> = columns
                 .iter()
-                .enumerate()
-                .map(|(i, v)| {
-                    let var_name = var_names.get(i).cloned().unwrap_or_else(|| format!("${}", i));
-                    ColumnValue { variable: var_name, value: convert_variable_value(v, &context, &tx.type_manager) }
+                .map(|col_name| {
+                    // Strip the leading '$' to get the variable name
+                    let var_name = col_name.strip_prefix('$').unwrap_or(col_name);
+                    let raw_value = row.get(var_name);
+                    let value = raw_value.map(convert_embedded_value).unwrap_or(RichValue::None);
+                    ColumnValue { variable: col_name.clone(), value }
                 })
                 .collect();
 
             rows.push(ResultRow { values });
         }
 
-        Ok((var_names, rows))
+        console_log!("  Query returned {} rows", rows.len());
+
+        // Log the full result as JSON for inspection
+        let result = QueryResult { success: true, row_count: rows.len(), columns, rows, error: None };
+        if let Ok(json) = serde_json::to_string_pretty(&result) {
+            console_log!("  Result JSON:\n{}", json);
+        }
+
+        result
     }
 
     fn analyze_internal(&self, query_str: &str) -> AnalyzeResult {
+        use database::transaction::TransactionRead;
+        use options::TransactionOptions;
+
+        console_log!("analyze() called");
+        console_log!("  Input query:\n{}", query_str);
+
         let parsed = match typeql::parse_query(query_str) {
-            Ok(parsed) => parsed,
+            Ok(parsed) => {
+                console_log!("  Query parsed successfully");
+                parsed
+            }
             Err(e) => {
-                return AnalyzeResult {
+                console_log!("  ERROR: Parse failed: {:?}", e);
+                let result = AnalyzeResult {
                     source: query_str.to_string(),
                     diagnostics: encode_typeql_error(query_str, &e),
                     query_type: None,
                     valid: false,
                 };
+                if let Ok(json) = serde_json::to_string_pretty(&result) {
+                    console_log!("  Result JSON:\n{}", json);
+                }
+                return result;
             }
         };
 
@@ -603,13 +549,19 @@ impl TypeDBPlayground {
             DetectedQueryType::Read => Some("read".to_string()),
             DetectedQueryType::Unknown => None,
         };
+        console_log!("  Detected query type: {:?}", query_type);
 
         let structure = parsed.into_structure();
-        match structure {
+        let result = match structure {
             typeql::query::QueryStructure::Pipeline(pipeline) => {
-                let tx = match TransactionRead::open(self.database.clone(), TransactionOptions::default()) {
-                    Ok(tx) => tx,
+                console_log!("  Query is a pipeline, opening transaction for analysis...");
+                let tx = match TransactionRead::open(self.raw_db.clone(), TransactionOptions::default()) {
+                    Ok(tx) => {
+                        console_log!("  Opened read transaction for analysis");
+                        tx
+                    }
                     Err(e) => {
+                        console_log!("  ERROR: Failed to open transaction: {:?}", e);
                         return AnalyzeResult {
                             source: query_str.to_string(),
                             diagnostics: vec![AnalyzeDiagnostic {
@@ -636,146 +588,111 @@ impl TypeDBPlayground {
                     query_str,
                 ) {
                     Ok(_analyzed) => {
+                        console_log!("  Analysis succeeded: query is valid");
                         AnalyzeResult { source: query_str.to_string(), diagnostics: vec![], query_type, valid: true }
                     }
-                    Err(e) => AnalyzeResult {
-                        source: query_str.to_string(),
-                        diagnostics: encode_query_error(query_str, &e),
-                        query_type,
-                        valid: false,
-                    },
+                    Err(e) => {
+                        console_log!("  Analysis found errors: {:?}", e);
+                        AnalyzeResult {
+                            source: query_str.to_string(),
+                            diagnostics: encode_query_error(query_str, &e),
+                            query_type,
+                            valid: false,
+                        }
+                    }
                 }
             }
             typeql::query::QueryStructure::Schema(_) => {
+                console_log!("  Query is a schema definition, marking as valid");
                 AnalyzeResult { source: query_str.to_string(), diagnostics: vec![], query_type, valid: true }
             }
+        };
+
+        if let Ok(json) = serde_json::to_string_pretty(&result) {
+            console_log!("  Result JSON:\n{}", json);
         }
+        result
     }
 }
 
 // ============================================================================
-// Value Conversion Helpers
+// Value Conversion from typedb-embedded types to Rich types
 // ============================================================================
 
-fn convert_variable_value(
-    value: &VariableValue<'_>,
-    context: &executor::pipeline::stage::ExecutionContext<storage::snapshot::ReadSnapshot<NoopDurabilityClient>>,
-    type_manager: &concept::type_::type_manager::TypeManager,
-) -> RichValue {
+fn convert_embedded_value(value: &EmbeddedValue) -> RichValue {
     match value {
-        VariableValue::None => RichValue::None,
-
-        VariableValue::Type(ty) => {
-            let label = ty
-                .get_label(context.snapshot.as_ref(), type_manager)
-                .ok()
-                .map(|l| l.name().to_string())
-                .unwrap_or_else(|| "unknown".to_string());
-
-            let category = match ty {
-                Type::Entity(_) => "entity",
-                Type::Relation(_) => "relation",
-                Type::Attribute(_) => "attribute",
-                Type::RoleType(_) => "role",
-            };
-
-            RichValue::Type { category: category.to_string(), label }
+        EmbeddedValue::None => RichValue::None,
+        EmbeddedValue::Entity { type_name, iid } => {
+            RichValue::Entity { type_name: type_name.clone(), iid: iid.clone() }
         }
-
-        VariableValue::Thing(thing) => convert_thing(thing, context, type_manager),
-
-        VariableValue::Value(val) => RichValue::Value(convert_value(val)),
-
-        VariableValue::ThingList(items) => {
-            RichValue::ThingList { items: items.iter().map(|t| convert_thing(t, context, type_manager)).collect() }
+        EmbeddedValue::Relation { type_name, iid } => {
+            RichValue::Relation { type_name: type_name.clone(), iid: iid.clone() }
         }
-
-        VariableValue::ValueList(items) => RichValue::ValueList { items: items.iter().map(convert_value).collect() },
-    }
-}
-
-fn convert_thing(
-    thing: &Thing,
-    context: &executor::pipeline::stage::ExecutionContext<storage::snapshot::ReadSnapshot<NoopDurabilityClient>>,
-    type_manager: &concept::type_::type_manager::TypeManager,
-) -> RichValue {
-    let type_ = thing.type_();
-    let label = type_
-        .get_label(context.snapshot.as_ref(), type_manager)
-        .ok()
-        .map(|l| l.name().to_string())
-        .unwrap_or_else(|| "unknown".to_string());
-
-    match thing {
-        Thing::Entity(entity) => {
-            RichValue::Entity { type_name: label, iid: format!("{:x}", entity.vertex().object_id().as_u64()) }
+        EmbeddedValue::Attribute { type_name, value } => {
+            RichValue::Attribute { type_name: type_name.clone(), value: convert_embedded_attr_value(value) }
         }
-        Thing::Relation(relation) => {
-            RichValue::Relation { type_name: label, iid: format!("{:x}", relation.vertex().object_id().as_u64()) }
+        EmbeddedValue::Type { category, label } => {
+            RichValue::Type { category: category.clone(), label: label.clone() }
         }
-        Thing::Attribute(attr) => {
-            // Try to get the actual value
-            let value = attr
-                .get_value(context.snapshot.as_ref(), context.thing_manager.as_ref(), StorageCounters::DISABLED)
-                .ok()
-                .map(|v| convert_value(&v))
-                .unwrap_or(AttributeValue::String("<error>".to_string()));
-
-            RichValue::Attribute { type_name: label, value }
+        EmbeddedValue::Computed(v) => RichValue::Value(convert_embedded_attr_value(v)),
+        EmbeddedValue::ThingList(items) => {
+            RichValue::ThingList { items: items.iter().map(convert_embedded_value).collect() }
+        }
+        EmbeddedValue::ValueList(items) => {
+            RichValue::ValueList { items: items.iter().map(convert_embedded_attr_value).collect() }
         }
     }
 }
 
-fn convert_value(value: &Value<'_>) -> AttributeValue {
+fn convert_embedded_attr_value(value: &EmbeddedAttributeValue) -> AttributeValue {
     match value {
-        Value::Boolean(b) => AttributeValue::Boolean(*b),
-        Value::Integer(i) => AttributeValue::Integer(*i),
-        Value::Double(d) => AttributeValue::Double(*d),
-        Value::Decimal(d) => AttributeValue::Decimal(format!("{}", d)),
-        Value::Date(d) => AttributeValue::Date(d.to_string()),
-        Value::DateTime(dt) => AttributeValue::DateTime(dt.to_string()),
-        Value::DateTimeTZ(dt) => AttributeValue::DateTimeTZ(dt.to_string()),
-        Value::Duration(d) => AttributeValue::Duration(format!("{:?}", d)),
-        Value::String(s) => AttributeValue::String(s.to_string()),
-        Value::Struct(s) => AttributeValue::Struct(format!("{:?}", s)),
+        EmbeddedAttributeValue::String(s) => AttributeValue::String(s.clone()),
+        EmbeddedAttributeValue::Integer(i) => AttributeValue::Integer(*i),
+        EmbeddedAttributeValue::Double(d) => AttributeValue::Double(*d),
+        EmbeddedAttributeValue::Boolean(b) => AttributeValue::Boolean(*b),
+        EmbeddedAttributeValue::Date(s) => AttributeValue::Date(s.clone()),
+        EmbeddedAttributeValue::DateTime(s) => AttributeValue::DateTime(s.clone()),
+        EmbeddedAttributeValue::DateTimeTZ(s) => AttributeValue::DateTimeTZ(s.clone()),
+        EmbeddedAttributeValue::Duration(s) => AttributeValue::Duration(s.clone()),
+        EmbeddedAttributeValue::Decimal(s) => AttributeValue::Decimal(s.clone()),
+        EmbeddedAttributeValue::Struct(s) => AttributeValue::Struct(s.clone()),
     }
 }
 
-fn extract_variable_names_from_positions(
-    positions: Option<&std::collections::HashMap<String, compiler::VariablePosition>>,
-) -> Vec<String> {
-    match positions {
-        Some(pos_map) => {
-            // Sort by position index to get variable names in column order
-            let mut vars: Vec<_> = pos_map.iter().map(|(name, pos)| (pos.as_usize(), format!("${}", name))).collect();
-            vars.sort_by_key(|(pos, _)| *pos);
-            vars.into_iter().map(|(_, name)| name).collect()
+fn convert_embedded_error(error: typedb_embedded::Error) -> QueryError {
+    let message = format!("{}", error);
+
+    let (kind, hint) = match &error {
+        typedb_embedded::Error::Database(_) => {
+            (ErrorKind::InternalError, Some("Database initialization issue".to_string()))
         }
-        None => vec![],
-    }
-}
-
-fn parse_typeql_error(error: typeql::Error, _query: &str) -> QueryError {
-    // Extract useful info from TypeQL errors
-    let message = format!("{:?}", error);
-
-    // Try to extract line/column from error message
-    let location = extract_error_location(&message);
-
-    QueryError {
-        kind: ErrorKind::ParseError,
-        message: clean_error_message(&message),
-        location,
-        hint: Some(
-            "Check TypeQL syntax. Common issues: missing semicolons, undefined types, or incorrect keywords."
-                .to_string(),
+        typedb_embedded::Error::Transaction(_) => {
+            (ErrorKind::TransactionError, Some("Try closing any other open transactions".to_string()))
+        }
+        typedb_embedded::Error::Parse(_) => (
+            ErrorKind::ParseError,
+            Some("Check TypeQL syntax. Common issues: missing semicolons, undefined types.".to_string()),
         ),
-    }
+        typedb_embedded::Error::Query(msg) => {
+            if msg.contains("Schema") || msg.contains("schema") {
+                (ErrorKind::SchemaError, Some("Check that all referenced types exist".to_string()))
+            } else if msg.contains("Pipeline") || msg.contains("pipeline") {
+                (ErrorKind::TypeError, Some("Use the correct transaction type for this query".to_string()))
+            } else {
+                (ErrorKind::DataError, Some("Check that all types and attributes are defined".to_string()))
+            }
+        }
+        typedb_embedded::Error::Commit(_) => {
+            (ErrorKind::TransactionError, Some("Commit failed - transaction may have been invalidated".to_string()))
+        }
+    };
+
+    let location = extract_error_location(&message);
+    QueryError { kind, message, location, hint }
 }
 
 fn extract_error_location(message: &str) -> Option<ErrorLocation> {
     // Try to find line:column pattern in error message
-    // TypeQL errors often contain "Near X:Y" or similar
     if let Some(near_idx) = message.find("Near ") {
         let rest = &message[near_idx + 5..];
         if let Some(colon_idx) = rest.find(':') {
@@ -790,18 +707,6 @@ fn extract_error_location(message: &str) -> Option<ErrorLocation> {
         }
     }
     None
-}
-
-fn clean_error_message(message: &str) -> String {
-    // Remove debug formatting artifacts
-    let cleaned = message.replace("Error { errors: [", "").replace("] }", "").replace("TypeQLError::", "");
-
-    // Truncate if too long
-    if cleaned.len() > 500 {
-        format!("{}...", &cleaned[..500])
-    } else {
-        cleaned
-    }
 }
 
 // ============================================================================
@@ -946,18 +851,16 @@ fn strip_comments(query: &str) -> String {
         }
 
         // Handle block comments (/* ... */)
-        if c == '/' {
-            if chars.peek() == Some(&'*') {
-                chars.next(); // consume '*'
-                              // Skip until */
-                while let Some(c2) = chars.next() {
-                    if c2 == '*' && chars.peek() == Some(&'/') {
-                        chars.next(); // consume '/'
-                        break;
-                    }
+        if c == '/' && chars.peek() == Some(&'*') {
+            chars.next(); // consume '*'
+                          // Skip until */
+            while let Some(c2) = chars.next() {
+                if c2 == '*' && chars.peek() == Some(&'/') {
+                    chars.next(); // consume '/'
+                    break;
                 }
-                continue;
             }
+            continue;
         }
 
         result.push(c);
@@ -974,9 +877,8 @@ fn detect_query_type_internal(query: &str) -> QueryTypeDetection {
 
     // Check for schema keywords
     for keyword in &["define", "undefine", "redefine"] {
-        if trimmed.starts_with(keyword) {
+        if let Some(rest) = trimmed.strip_prefix(keyword) {
             // Ensure it's actually the keyword and not part of another word
-            let rest = &trimmed[keyword.len()..];
             if rest.is_empty() || rest.starts_with(char::is_whitespace) || rest.starts_with(';') {
                 return QueryTypeDetection {
                     query_type: DetectedQueryType::Schema,
@@ -988,8 +890,7 @@ fn detect_query_type_internal(query: &str) -> QueryTypeDetection {
     }
 
     // Check for write keywords (insert at start, or delete anywhere after match)
-    if trimmed.starts_with("insert") {
-        let rest = &trimmed[6..];
+    if let Some(rest) = trimmed.strip_prefix("insert") {
         if rest.is_empty() || rest.starts_with(char::is_whitespace) {
             return QueryTypeDetection {
                 query_type: DetectedQueryType::Write,
@@ -1000,8 +901,7 @@ fn detect_query_type_internal(query: &str) -> QueryTypeDetection {
     }
 
     // Check for match-based queries
-    if trimmed.starts_with("match") {
-        let rest = &trimmed[5..];
+    if let Some(rest) = trimmed.strip_prefix("match") {
         if rest.is_empty() || rest.starts_with(char::is_whitespace) {
             // Check if there's a delete or insert later (making it a write query)
             // Look for delete or insert as standalone keywords
@@ -1033,8 +933,7 @@ fn detect_query_type_internal(query: &str) -> QueryTypeDetection {
     }
 
     // Check for fetch (always read)
-    if trimmed.starts_with("fetch") {
-        let rest = &trimmed[5..];
+    if let Some(rest) = trimmed.strip_prefix("fetch") {
         if rest.is_empty() || rest.starts_with(char::is_whitespace) {
             return QueryTypeDetection {
                 query_type: DetectedQueryType::Read,
