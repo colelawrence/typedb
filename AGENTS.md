@@ -19,17 +19,23 @@ bazel build //:assemble-server-mac-arm64-zip  # macOS ARM64
 ```
 
 ### Test Commands
+
+See [TESTING.md](TESTING.md) for comprehensive testing strategy.
+
 ```bash
-# Run all tests
-cargo test --workspace
+# Quick verification (run in order)
+cargo check --workspace          # Fast compilation check
+cargo test --workspace --lib     # Unit tests only
+cargo test --workspace           # All Rust tests
 
-# Run specific test suite
-cargo test --test test_query
-cargo test --test test_concept
-cargo test --test test_connection
+# TypeScript SDK tests
+cd sdk/embedded && bun test           # Bun tests (15 tests)
+cd sdk/embedded && bun run test:browser  # Browser tests (17 tests)
 
-# Run unit tests only
-cargo test --workspace --lib
+# Specific components
+cargo test -p typedb-embedded    # Embedded API
+cargo test -p compiler           # Query compiler
+cargo test -p typeql             # TypeQL parser
 ```
 
 ### Format & Lint
