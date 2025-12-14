@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TypeDB Embedded - Browser Demo</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 20px;
+      line-height: 1.6;
+    }
+    h1 {
+      color: #333;
+      border-bottom: 2px solid #4a90d9;
+      padding-bottom: 10px;
+    }
+    .status {
+      padding: 10px 15px;
+      border-radius: 6px;
+      margin: 10px 0;
+      font-weight: 500;
+    }
+    .status.loading { background: #fff3cd; color: #856404; }
+    .status.success { background: #d4edda; color: #155724; }
+    .status.error { background: #f8d7da; color: #721c24; }
+    .section {
+      margin: 20px 0;
+      padding: 15px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+    }
+    .section h2 {
+      margin-top: 0;
+      color: #4a90d9;
+    }
+    textarea {
+      width: 100%;
+      height: 80px;
+      font-family: monospace;
+      font-size: 14px;
+      padding: 10px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+    button {
+      background: #4a90d9;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      margin: 5px 5px 5px 0;
+    }
+    button:hover { background: #357abd; }
+    button:disabled { background: #ccc; cursor: not-allowed; }
+    pre {
+      background: #f5f5f5;
+      padding: 15px;
+      border-radius: 4px;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+    .result-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 10px 0;
+    }
+    .result-table th, .result-table td {
+      border: 1px solid #ddd;
+      padding: 8px;
+      text-align: left;
+    }
+    .result-table th {
+      background: #4a90d9;
+      color: white;
+    }
+    .result-table tr:nth-child(even) {
+      background: #f9f9f9;
+    }
+    .test-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 5px 0;
+    }
+    .test-item .icon {
+      font-size: 18px;
+    }
+    .test-pass { color: #28a745; }
+    .test-fail { color: #dc3545; }
+    .test-pending { color: #6c757d; }
+  </style>
+</head>
+<body>
+  <h1>🗄️ TypeDB Embedded - Browser Demo</h1>
+
+  <div id="wasm-status" class="status loading">
+    Loading WASM module...
+  </div>
+
+  <div class="section" id="tests-section" style="display: none;">
+    <h2>Automated Tests</h2>
+    <button id="run-tests">Run All Tests</button>
+    <div id="test-results"></div>
+  </div>
+
+  <div class="section" id="interactive-section" style="display: none;">
+    <h2>Interactive Query</h2>
+    
+    <div style="margin-bottom: 15px;">
+      <label><strong>Database:</strong></label>
+      <input type="text" id="db-name" value="demo" style="padding: 5px; width: 150px;">
+      <button id="create-db">Create Database</button>
+      <span id="db-status"></span>
+    </div>
+
+    <div style="margin-bottom: 15px;">
+      <label><strong>TypeQL Query:</strong></label>
+      <textarea id="query-input">define attribute name value string; entity person owns name;</textarea>
+    </div>
+
+    <div>
+      <button id="run-define">Define Schema</button>
+      <button id="run-execute">Execute (Insert/Delete)</button>
+      <button id="run-query">Query (Read)</button>
+    </div>
+
+    <div style="margin-top: 15px;">
+      <strong>Result:</strong>
+      <pre id="query-result">No result yet</pre>
+    </div>
+  </div>
+
+  <div class="section" id="examples-section" style="display: none;">
+    <h2>Quick Examples</h2>
+    <button onclick="loadExample('schema')">Load Schema Example</button>
+    <button onclick="loadExample('insert')">Load Insert Example</button>
+    <button onclick="loadExample('query')">Load Query Example</button>
+  </div>
+
+  <script type="module">
+    import { Database, initWasm, ParseError, SchemaError, DataError } from '@typedb/embedded';
+
+    // Global state
+    let currentDb = null;
+
+    // DOM elements
+    const wasmStatus = document.getElementById('wasm-status');
+    const testsSection = document.getElementById('tests-section');
+    const interactiveSection = document.getElementById('interactive-section');
+    const examplesSection = document.getElementById('examples-section');
+    const dbStatus = document.getElementById('db-status');
+    const queryResult = document.getElementById('query-result');
+    const queryInput = document.getElementById('query-input');
+
+    // Initialize WASM
+    async function init() {
+      try {
+        await initWasm();
+        wasmStatus.textContent = '✅ WASM loaded successfully!';
+        wasmStatus.className = 'status success';
+        
+        testsSection.style.display = 'block';
+        interactiveSection.style.display = 'block';
+        examplesSection.style.display = 'block';
+      } catch (error) {
+        wasmStatus.textContent = `❌ Failed to load WASM: ${error.message}`;
+        wasmStatus.className = 'status error';
+        console.error('WASM init error:', error);
+      }
+    }
+
+    // Test runner
+    const tests = [
+      {
+        name: 'Create database',
+        run: async () => {
+          const db = await Database.open('test_create');
+          if (db.name !== 'test_create') throw new Error('Name mismatch');
+        }
+      },
+      {
+        name: 'Define schema',
+        run: async () => {
+          const db = await Database.open('test_schema');
+          await db.define('define entity person;');
+        }
+      },
+      {
+        name: 'Insert and query',
+        run: async () => {
+          const db = await Database.open('test_insert_query');
+          await db.define('define attribute name value string; entity person owns name;');
+          const count = await db.execute('insert $p isa person, has name "Alice";');
+          if (count !== 1) throw new Error('Insert count mismatch');
+          
+          const result = await db.query('match $p isa person, has name $n;');
+          if (result.rowCount !== 1) throw new Error('Query count mismatch');
+          if (result.rows[0].n.asString() !== 'Alice') throw new Error('Value mismatch');
+        }
+      },
+      {
+        name: 'Value types (string, integer, double, boolean)',
+        run: async () => {
+          const db = await Database.open('test_values');
+          await db.define(`
+            define
+            attribute name value string;
+            attribute age value integer;
+            attribute score value double;
+            attribute active value boolean;
+            entity person owns name, owns age, owns score, owns active;
+          `);
+          await db.execute('insert $p isa person, has name "Bob", has age 25, has score 98.5, has active true;');
+          
+          const row = await db.queryOneRequired('match $p isa person, has name $n, has age $a, has score $s, has active $active;');
+          if (row.n.asString() !== 'Bob') throw new Error('String mismatch');
+          if (row.a.asInteger() !== 25) throw new Error('Integer mismatch');
+          if (row.s.asDouble() !== 98.5) throw new Error('Double mismatch');
+          if (row.active.asBoolean() !== true) throw new Error('Boolean mismatch');
+        }
+      },
+      {
+        name: 'Relations',
+        run: async () => {
+          const db = await Database.open('test_relations');
+          await db.define(`
+            define
+            attribute name value string;
+            entity person owns name;
+            entity company owns name;
+            relation employment relates employee, relates employer;
+            person plays employment:employee;
+            company plays employment:employer;
+          `);
+          await db.execute('insert $p isa person, has name "Carol";');
+          await db.execute('insert $c isa company, has name "TechCorp";');
+          await db.execute(`
+            match $p isa person, has name "Carol"; $c isa company, has name "TechCorp";
+            insert (employee: $p, employer: $c) isa employment;
+          `);
+          
+          const result = await db.query('match (employee: $p, employer: $c) isa employment;');
+          if (result.rowCount !== 1) throw new Error('Relation query mismatch');
+        }
+      },
+      {
+        name: 'Parse error handling',
+        run: async () => {
+          const db = await Database.open('test_parse_error');
+          try {
+            await db.query('invalid typeql syntax');
+            throw new Error('Should have thrown');
+          } catch (e) {
+            if (!(e instanceof ParseError)) throw new Error('Expected ParseError');
+          }
+        }
+      },
+      {
+        name: 'queryOne returns undefined for empty',
+        run: async () => {
+          const db = await Database.open('test_query_one');
+          await db.define('define entity person;');
+          const row = await db.queryOne('match $p isa person;');
+          if (row !== undefined) throw new Error('Expected undefined');
+        }
+      },
+      {
+        name: 'Result helper methods',
+        run: async () => {
+          const db = await Database.open('test_helpers');
+          await db.define('define entity person;');
+          await db.execute('insert $p isa person;');
+          
+          const result = await db.query('match $p isa person;');
+          if (result.isEmpty()) throw new Error('Should not be empty');
+          if (!result.first()) throw new Error('Should have first');
+          
+          const empty = await db.query('match $p isa nonexistent_type;');
+          // This will error because the type doesn't exist
+        }
+      },
+    ];
+
+    async function runTests() {
+      const resultsDiv = document.getElementById('test-results');
+      resultsDiv.innerHTML = '';
+
+      for (const test of tests) {
+        const item = document.createElement('div');
+        item.className = 'test-item';
+        item.innerHTML = `<span class="icon test-pending">⏳</span> ${test.name}`;
+        resultsDiv.appendChild(item);
+
+        try {
+          await test.run();
+          item.innerHTML = `<span class="icon test-pass">✅</span> ${test.name}`;
+        } catch (error) {
+          item.innerHTML = `<span class="icon test-fail">❌</span> ${test.name}: ${error.message}`;
+          console.error(`Test "${test.name}" failed:`, error);
+        }
+      }
+    }
+
+    // Interactive handlers
+    async function createDatabase() {
+      try {
+        const name = document.getElementById('db-name').value;
+        currentDb = await Database.open(name);
+        dbStatus.textContent = `✅ Database "${name}" created`;
+        dbStatus.style.color = '#28a745';
+      } catch (error) {
+        dbStatus.textContent = `❌ ${error.message}`;
+        dbStatus.style.color = '#dc3545';
+      }
+    }
+
+    async function runDefine() {
+      if (!currentDb) {
+        queryResult.textContent = 'Create a database first!';
+        return;
+      }
+      try {
+        await currentDb.define(queryInput.value);
+        queryResult.textContent = '✅ Schema defined successfully';
+      } catch (error) {
+        queryResult.textContent = `❌ Error: ${error.message}`;
+      }
+    }
+
+    async function runExecute() {
+      if (!currentDb) {
+        queryResult.textContent = 'Create a database first!';
+        return;
+      }
+      try {
+        const count = await currentDb.execute(queryInput.value);
+        queryResult.textContent = `✅ Executed successfully. Rows affected: ${count}`;
+      } catch (error) {
+        queryResult.textContent = `❌ Error: ${error.message}`;
+      }
+    }
+
+    async function runQuery() {
+      if (!currentDb) {
+        queryResult.textContent = 'Create a database first!';
+        return;
+      }
+      try {
+        const result = await currentDb.query(queryInput.value);
+        let output = `Columns: ${result.columns.join(', ')}\nRow count: ${result.rowCount}\n\n`;
+        
+        for (const row of result.rows) {
+          const entries = Object.entries(row).map(([k, v]) => `${k}: ${v.toString()}`);
+          output += entries.join(', ') + '\n';
+        }
+        
+        queryResult.textContent = output;
+      } catch (error) {
+        queryResult.textContent = `❌ Error: ${error.message}`;
+      }
+    }
+
+    // Examples
+    window.loadExample = function(type) {
+      switch (type) {
+        case 'schema':
+          queryInput.value = `define
+attribute name value string;
+attribute age value integer;
+entity person owns name, owns age;`;
+          break;
+        case 'insert':
+          queryInput.value = 'insert $p isa person, has name "Alice", has age 30;';
+          break;
+        case 'query':
+          queryInput.value = 'match $p isa person, has name $n, has age $a;';
+          break;
+      }
+    };
+
+    // Wire up event listeners
+    document.getElementById('run-tests').addEventListener('click', runTests);
+    document.getElementById('create-db').addEventListener('click', createDatabase);
+    document.getElementById('run-define').addEventListener('click', runDefine);
+    document.getElementById('run-execute').addEventListener('click', runExecute);
+    document.getElementById('run-query').addEventListener('click', runQuery);
+
+    // Start
+    init();
+  </script>
+</body>
+</html>
