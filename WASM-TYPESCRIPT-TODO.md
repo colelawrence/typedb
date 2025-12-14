@@ -9,34 +9,24 @@ Enable TypeDB to run entirely in the browser or Bun with an ergonomic, type-safe
 ```typescript
 import { Database } from '@typedb/embedded';
 
-const db = await Database.create('mydb');
+const db = await Database.open('mydb');
 
 // Define schema
-const schema = await db.transactionSchema();
-await schema.execute(`
+await db.define(`
   define
   attribute name value string;
   attribute age value integer;
   entity person owns name, owns age;
 `);
-await schema.commit();
 
 // Insert data
-const write = await db.transactionWrite();
-await write.execute('insert $p isa person, has name "Alice", has age 30;');
+await db.execute('insert $p isa person, has name "Alice", has age 30;');
 
 // Query data
-const read = await db.transactionRead();
-const result = await read.query<{
-  p: EntityValue;
-  name: AttributeValue<'string'>;
-  age: AttributeValue<'integer'>;
-}>('match $p isa person, has name $name, has age $age;');
-
+const result = await db.query('match $p isa person, has name $name, has age $age;');
 for (const row of result.rows) {
-  console.log(`${row.name.value} is ${row.age.value} years old`);
+  console.log(`${row.name.asString()} is ${row.age.asInteger()} years old`);
 }
-read.close();
 ```
 
 ---
@@ -1218,416 +1208,173 @@ export { initWasm, isWasmReady } from './wasm';
 
 **Goal:** Add conveniences and improve TypeScript type inference.
 
-### Implementation
-- **Typed query results**: `query<T>()` generic already implemented in Phase 2
-- **Throwing extractors**: `extractString()`, `extractInteger()`, `extractDouble()`, `extractBoolean()` - throw TypeError on wrong type
-- **Entity/Relation helpers**: `getTypeName()`, `getIid()`, `getTypeLabel()`, `getTypeCategory()`
-- **Convenience methods**: `db.define()`, `db.insert()`, `db.query()` already implemented in Phase 2
-- **Tests added**: 11 passing tests including extractors and helpers
+### Implementation (API Redesign)
 
-### Step 3.1: Typed Query Results
+Based on feedback from SDK design analysis, I redesigned the API to be more ergonomic:
 
-Allow users to specify expected row shape:
+#### Simple API (Database class top-level methods)
+```typescript
+const db = await Database.open('mydb');
+
+// Schema definition (auto-commits)
+await db.define('define entity person; attribute name value string; person owns name;');
+
+// Write data (auto-commits)  
+const count = await db.execute('insert $p isa person, has name "Alice";');
+
+// Read data (auto-closes transaction)
+const result = await db.query('match $p isa person, has name $n;');
+const row = await db.queryOne('match $p isa person;');       // First or undefined
+const row = await db.queryOneRequired('match $p isa person;'); // First or throw
+```
+
+#### Value Wrapper Class
+Instead of standalone extractor functions, I created a `Value` wrapper class:
 
 ```typescript
-// Define expected shape
-interface PersonRow {
-  p: EntityValue;
-  name: AttributeThingValue;
-  age: AttributeThingValue;
+const row = result.rows[0];
+
+// Type checks (getters)
+row.p.isEntity;     // true
+row.n.isAttribute;  // true
+row.p.typeName;     // 'person'
+row.p.iid;          // '0x123...'
+
+// Value extraction (throwing)
+row.n.asString();   // 'Alice'
+row.a.asInteger();  // 30
+row.s.asDouble();   // 95.5
+row.b.asBoolean();  // true
+
+// Optional extraction (returns undefined)
+row.n.tryString();  // 'Alice'
+row.n.tryInteger(); // undefined
+
+// Serialization
+row.n.toString();   // 'Alice'
+row.n.toJSON();     // { kind: 'attribute', typeName: 'name', value: 'Alice' }
+```
+
+#### Transaction API (for advanced use)
+```typescript
+// Read transaction with automatic cleanup
+{
+  await using tx = await db.read();
+  const result = await tx.query('match $p isa person;');
 }
 
-// Query with type parameter
-const result = await tx.query<PersonRow>('match $p isa person, has name $name, has age $age;');
+// Schema transaction with callback pattern
+await db.transaction(async (tx) => {
+  await tx.execute('define entity person;');
+  await tx.execute('define attribute name value string;');
+  // Auto-commits on success, rolls back on error
+});
 
-// Rows are now typed
-for (const row of result.rows) {
-  row.p;    // EntityValue
-  row.name; // AttributeThingValue
-  row.age;  // AttributeThingValue
+// Or manual control
+{
+  await using tx = await db.schema();
+  await tx.execute('define entity person;');
+  await tx.commit(); // or tx.rollback()
 }
 ```
 
-### Step 3.2: Value Extractors
+### Verification (Phase 3) ✓
 
-**src/extractors.ts:**
-```typescript
-import type { Value, AttributeValue } from './types';
-
-/** Type-safe value extraction */
-export function extractString(value: Value): string {
-  if (value.kind === 'attribute' && value.value.type === 'string') {
-    return value.value.value;
-  }
-  throw new TypeError(`Expected string attribute, got ${value.kind}`);
-}
-
-export function extractInteger(value: Value): number {
-  if (value.kind === 'attribute' && value.value.type === 'integer') {
-    return value.value.value;
-  }
-  throw new TypeError(`Expected integer attribute, got ${value.kind}`);
-}
-
-export function extractBoolean(value: Value): boolean {
-  if (value.kind === 'attribute' && value.value.type === 'boolean') {
-    return value.value.value;
-  }
-  throw new TypeError(`Expected boolean attribute, got ${value.kind}`);
-}
-
-/** Get entity/relation type name */
-export function getTypeName(value: Value): string {
-  if (value.kind === 'entity' || value.kind === 'relation' || value.kind === 'attribute') {
-    return value.typeName;
-  }
-  throw new TypeError(`Expected entity, relation, or attribute, got ${value.kind}`);
-}
-
-/** Get entity/relation IID */
-export function getIid(value: Value): string {
-  if (value.kind === 'entity' || value.kind === 'relation') {
-    return value.iid;
-  }
-  throw new TypeError(`Expected entity or relation, got ${value.kind}`);
-}
-```
-
-### Step 3.3: Schema Helper
-
-**src/schema.ts:**
-```typescript
-import type { Database } from './database';
-
-/**
- * Helper for schema operations.
- * 
- * @example
- * ```typescript
- * await db.schema.define(`
- *   define
- *   entity person owns name;
- *   attribute name value string;
- * `);
- * ```
- */
-export class Schema {
-  constructor(private readonly db: Database) {}
-
-  /** Execute a define query and commit. */
-  async define(typeql: string): Promise<void> {
-    const tx = await this.db.transactionSchema();
-    await tx.execute(typeql);
-    await tx.commit();
-  }
-
-  /** Execute an undefine query and commit. */
-  async undefine(typeql: string): Promise<void> {
-    const tx = await this.db.transactionSchema();
-    await tx.execute(typeql);
-    await tx.commit();
-  }
-}
-
-// Add to Database class
-declare module './database' {
-  interface Database {
-    readonly schema: Schema;
-  }
-}
-```
-
-### Step 3.4: Convenience Methods
-
-Add to Database class:
-
-```typescript
-export class Database {
-  // ... existing methods ...
-
-  /** Convenience: define schema in one call */
-  async define(typeql: string): Promise<void> {
-    const tx = await this.transactionSchema();
-    await tx.execute(typeql);
-    await tx.commit();
-  }
-
-  /** Convenience: insert data in one call */
-  async insert(typeql: string): Promise<number> {
-    const tx = await this.transactionWrite();
-    return tx.execute(typeql);
-  }
-
-  /** Convenience: query data in one call (auto-closes transaction) */
-  async query<T extends Row = Row>(typeql: string): Promise<QueryResult<T>> {
-    const tx = await this.transactionRead();
-    try {
-      return await tx.query<T>(typeql);
-    } finally {
-      tx.close();
-    }
-  }
-}
-```
-
-### Verification (Phase 3)
-
-- [ ] Type inference works correctly in VSCode
-- [ ] Value extractors throw appropriate TypeErrors
-- [ ] Schema helper works:
-  ```typescript
-  await db.define('define entity person;');
-  ```
-- [ ] Convenience methods work:
-  ```typescript
-  await db.insert('insert $p isa person;');
-  const result = await db.query('match $p isa person;');
-  ```
+- [x] Type inference works correctly in VSCode
+- [x] Value extractors throw appropriate TypeErrors
+- [x] Schema convenience methods work
+- [x] Read/write convenience methods work
+- [x] Transaction callback pattern works
+- [x] `Symbol.asyncDispose` support for `await using`
+- [x] 15 passing tests covering all functionality
 
 ---
 
-## Phase 4: Testing and Packaging
+## Phase 4: Testing and Packaging ✓
+
+**Status: Complete**
 
 **Goal:** Comprehensive test suite and npm publishing.
 
-### Step 4.1: Test Suite
+### Implementation
 
-**tests/basic.test.ts:**
-```typescript
-import { describe, it, expect, beforeEach } from 'bun:test';
-import { Database, ParseError, isEntity, getStringValue } from '../src';
+The test suite is located in `sdk/embedded/src/index.test.ts` with 15 passing tests covering:
+- Database creation and naming
+- Schema definition
+- Data insertion and querying
+- Query result helpers (`queryOne`, `queryOneRequired`)
+- Multiple inserts
+- Multi-column queries
+- Employment relations (complex relation test)
+- Parse error handling
+- Schema rollback
+- Auto-rollback on dispose
+- Value wrapper methods
+- Read transaction with `await using`
+- Transaction callback pattern
+- Result helper methods
 
-describe('Database', () => {
-  it('creates database', async () => {
-    const db = await Database.create('test_create');
-    expect(db.name).toBe('test_create');
-  });
-});
-
-describe('Schema', () => {
-  it('defines entity type', async () => {
-    const db = await Database.create('test_schema');
-    await db.define('define entity person;');
-    // Should not throw
-  });
-
-  it('defines entity with attributes', async () => {
-    const db = await Database.create('test_schema_attrs');
-    await db.define(`
-      define
-      attribute name value string;
-      entity person owns name;
-    `);
-  });
-});
-
-describe('Query', () => {
-  let db: Database;
-
-  beforeEach(async () => {
-    db = await Database.create(`test_query_${Date.now()}`);
-    await db.define(`
-      define
-      attribute name value string;
-      entity person owns name;
-    `);
-  });
-
-  it('inserts and queries', async () => {
-    await db.insert('insert $p isa person, has name "Alice";');
-    const result = await db.query('match $p isa person, has name $n;');
-    
-    expect(result.rowCount).toBe(1);
-    expect(result.columns).toContain('$n');
-    
-    const row = result.rows[0];
-    expect(isEntity(row.p)).toBe(true);
-    expect(getStringValue(row.n)).toBe('Alice');
-  });
-});
-
-describe('Errors', () => {
-  it('throws ParseError for invalid syntax', async () => {
-    const db = await Database.create('test_errors');
-    const tx = await db.transactionRead();
-    
-    await expect(tx.query('not valid typeql'))
-      .rejects
-      .toBeInstanceOf(ParseError);
-  });
-});
-```
-
-**tests/relations.test.ts:**
-```typescript
-import { describe, it, expect, beforeEach } from 'bun:test';
-import { Database, getStringValue, isEntity } from '../src';
-
-describe('Relations', () => {
-  let db: Database;
-
-  beforeEach(async () => {
-    db = await Database.create(`test_relations_${Date.now()}`);
-    await db.define(`
-      define
-      attribute name value string;
-      attribute email value string;
-      entity person owns name, owns email @key;
-      entity company owns name;
-      relation employment relates employee, relates employer;
-      person plays employment:employee;
-      company plays employment:employer;
-    `);
-  });
-
-  it('queries employment relations correctly', async () => {
-    // Insert people
-    await db.insert('insert $p isa person, has name "Alice", has email "alice@example.com";');
-    await db.insert('insert $p isa person, has name "Bob", has email "bob@example.com";');
-    
-    // Insert company
-    await db.insert('insert $c isa company, has name "Acme Corp";');
-    
-    // Create employment relations
-    await db.insert(`
-      match
-        $alice isa person, has email "alice@example.com";
-        $acme isa company, has name "Acme Corp";
-      insert
-        (employee: $alice, employer: $acme) isa employment;
-    `);
-    await db.insert(`
-      match
-        $bob isa person, has email "bob@example.com";
-        $acme isa company, has name "Acme Corp";
-      insert
-        (employee: $bob, employer: $acme) isa employment;
-    `);
-
-    // Query employees
-    const result = await db.query(`
-      match
-        $person isa person, has name $name;
-        $company isa company, has name "Acme Corp";
-        (employee: $person, employer: $company) isa employment;
-    `);
-
-    expect(result.rowCount).toBe(2);
-    
-    const names = result.rows.map(row => getStringValue(row.name));
-    expect(names).toContain('Alice');
-    expect(names).toContain('Bob');
-
-    // Verify column alignment
-    for (const row of result.rows) {
-      expect(isEntity(row.person)).toBe(true);
-      expect(isEntity(row.company)).toBe(true);
-      expect(row.name.kind).toBe('attribute');
-    }
-  });
-});
-```
-
-### Step 4.2: Package Configuration
+### Build Configuration
 
 **package.json:**
 ```json
 {
   "name": "@typedb/embedded",
   "version": "0.1.0",
-  "description": "TypeDB embedded database for TypeScript",
   "type": "module",
-  "main": "dist/index.js",
-  "module": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
     }
   },
-  "files": [
-    "dist"
-  ],
+  "files": ["dist", "wasm"],
   "scripts": {
-    "build": "tsup",
+    "build:wasm": "cd ../../typedb-wasm && wasm-pack build --target web --out-dir ../sdk/embedded/wasm",
+    "build:ts": "tsc",
+    "build": "npm run build:wasm && npm run build:ts",
     "test": "bun test",
-    "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build"
-  },
-  "dependencies": {
-    "typedb-wasm": "workspace:*"
-  },
-  "devDependencies": {
-    "@types/bun": "latest",
-    "tsup": "^8.0.0",
-    "typescript": "^5.0.0"
-  },
-  "keywords": ["typedb", "database", "graph", "wasm", "embedded"],
-  "license": "MPL-2.0"
+    "typecheck": "tsc --noEmit"
+  }
 }
 ```
 
-**tsup.config.ts:**
-```typescript
-import { defineConfig } from 'tsup';
+### Build Commands
 
-export default defineConfig({
-  entry: ['src/index.ts'],
-  format: ['esm'],
-  dts: true,
-  sourcemap: true,
-  clean: true,
-  external: ['typedb-wasm'],
-});
+```bash
+cd sdk/embedded
+bun install           # Install dependencies
+bun run build:wasm    # Build WASM from typedb-wasm crate  
+bun run build:ts      # Build TypeScript
+bun run typecheck     # Type check (excludes test files)
+bun test              # Run tests (15 passing)
 ```
 
-### Step 4.3: Build Scripts
+### Verification (Phase 4) ✓
 
-Add to root `package.json` or create `Makefile`:
-
-```makefile
-.PHONY: build-wasm build-ts test
-
-# Build WASM package
-build-wasm:
-	cd typedb-wasm && wasm-pack build --release --target bundler --out-dir pkg
-
-# Build TypeScript SDK
-build-ts:
-	cd packages/typedb-embedded-ts && npm run build
-
-# Build everything
-build: build-wasm build-ts
-
-# Run tests
-test:
-	cargo test --package typedb-embedded
-	cd packages/typedb-embedded-ts && npm test
-
-# Full CI build
-ci: build test
-```
-
-### Verification (Phase 4)
-
-- [ ] All tests pass: `npm test`
-- [ ] Types are correct: `npm run typecheck`
-- [ ] Package builds: `npm run build`
-- [ ] Package can be installed from local path:
+- [x] All tests pass: `bun test` (15 tests)
+- [x] Types are correct: `bun run typecheck`
+- [x] Package builds: `bun run build:ts`
+- [x] Package can be installed from local path:
   ```bash
-  cd example-project
-  npm install ../packages/typedb-embedded-ts
+  cd /tmp/test-project
+  bun add /path/to/sdk/embedded
   ```
-- [ ] Works in browser (Vite):
+- [x] Works in Bun:
   ```typescript
   import { Database } from '@typedb/embedded';
-  const db = await Database.create('browser-test');
+  const db = await Database.open('test');
+  await db.define('define entity person;');
+  await db.execute('insert $p isa person;');
+  const result = await db.query('match $p isa person;');
   ```
-- [ ] Works in Bun:
-  ```bash
-  bun run example.ts
-  ```
+- [x] Works in browser (Vite + Vitest + Playwright):
+  - Browser tests at `sdk/embedded/browser-tests/`
+  - 17 browser tests covering Database, Relations, and Transactions
+  - Run with `bun run test:browser` from `sdk/embedded/`
+  - Interactive demo at `http://localhost:5173` via `bun run dev:browser`
 
 ---
 
