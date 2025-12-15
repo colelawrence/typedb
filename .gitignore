@@ -34,6 +34,7 @@ target
 *.jarg
 *.war
 *.ear
+*.tgz
 
 # Gradle
 .gradle/
