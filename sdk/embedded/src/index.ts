@@ -36,12 +36,12 @@
  */
 
 // Core
-export { Database } from './database.js';
-export { Value } from './value.js';
-export { ReadTransaction, SchemaTransaction } from './transaction.js';
+export { Database } from './database.ts';
+export { Value } from './value.ts';
+export { ReadTransaction, SchemaTransaction } from './transaction.ts';
 
 // Result types
-export type { Row, QueryResult } from './result.js';
+export type { Row, QueryResult } from './result.ts';
 
 // Error types
 export {
@@ -51,15 +51,15 @@ export {
   DataError,
   TransactionError,
   InternalError,
-} from './error.js';
+} from './error.ts';
 
 // Storage (persistence)
-export { IndexedDBStorage } from './storage.js';
+export { IndexedDBStorage } from './storage.ts';
 export type {
   StorageAdapter,
   StorageOptions,
   PersistencePolicy,
-} from './storage.js';
+} from './storage.ts';
 
 // Advanced: WASM utilities
-export { initWasm, isWasmReady } from './wasm.js';
+export { initWasm, isWasmReady } from './wasm.ts';

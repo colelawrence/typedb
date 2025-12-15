@@ -24,7 +24,8 @@
     "test:browser": "cd browser-tests && npm test",
     "test:browser:ui": "cd browser-tests && npm run test:ui",
     "dev:browser": "cd browser-tests && npm run dev",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "publish:jsr": "npx jsr publish"
   },
   "keywords": [
     "typedb",

@@ -4,9 +4,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { Value, wrapValue, type RawValue
-
- } from './value.js';
+import { Value, wrapValue, type RawValue } from './value.ts';
 
 /**
  * A row from query results with keyed access to Values.

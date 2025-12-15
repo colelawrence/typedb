@@ -4,16 +4,16 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { initWasm, type WasmDatabase } from './wasm.js';
-import { ReadTransaction, SchemaTransaction, executeWrite } from './transaction.js';
-import { createQueryResult, type QueryResult, type Row } from './result.js';
-import type { InternalQueryResult } from './result.js';
+import { initWasm, type WasmDatabase } from './wasm.ts';
+import { ReadTransaction, SchemaTransaction, executeWrite } from './transaction.ts';
+import { createQueryResult, type QueryResult, type Row } from './result.ts';
+import type { InternalQueryResult } from './result.ts';
 import {
   type StorageAdapter,
   type StorageOptions,
   type PersistencePolicy,
   resolveStorage,
-} from './storage.js';
+} from './storage.ts';
 
 /**
  * A TypeDB embedded database instance.

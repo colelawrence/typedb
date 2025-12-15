@@ -5,7 +5,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { Database, ParseError, type StorageAdapter } from './index.js';
+import { Database, ParseError, type StorageAdapter } from './index.ts';
 
 /**
  * In-memory storage adapter for testing persistence.
