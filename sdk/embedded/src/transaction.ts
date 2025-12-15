@@ -8,10 +8,10 @@ import type {
   WasmTransactionRead,
   WasmTransactionWrite,
   WasmTransactionSchema,
-} from './wasm.ts';
-import type { InternalQueryResult, InternalOperationResult, QueryResult, Row } from './result.ts';
-import { createQueryResult } from './result.ts';
-import { createError, TransactionError } from './error.ts';
+} from './wasm.js';
+import type { InternalQueryResult, InternalOperationResult, QueryResult, Row } from './result.js';
+import { createQueryResult } from './result.js';
+import { createError, TransactionError } from './error.js';
 
 /**
  * A read-only transaction for querying data.

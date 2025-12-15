@@ -4,7 +4,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import type { ErrorKind, WasmError, ErrorLocation } from './result.ts';
+import type { ErrorKind, WasmError, ErrorLocation } from './result.js';
 
 /**
  * Base error class for all TypeDB errors.

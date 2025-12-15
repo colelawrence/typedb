@@ -4,6 +4,11 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import type { RawValue, RawAttributeValue } from './wasm.js';
+
+// Re-export for use by other modules
+export type { RawValue, RawAttributeValue };
+
 /**
  * Value wrapper class for TypeDB query results.
  *
@@ -296,32 +301,6 @@ export class Value {
     return this.raw;
   }
 }
-
-// ============================================================================
-// Raw Types (internal, from WASM)
-// ============================================================================
-
-export type RawAttributeValue =
-  | { type: 'string'; value: string }
-  | { type: 'integer'; value: number }
-  | { type: 'double'; value: number }
-  | { type: 'boolean'; value: boolean }
-  | { type: 'date'; value: string }
-  | { type: 'dateTime'; value: string }
-  | { type: 'dateTimeTz'; value: string }
-  | { type: 'duration'; value: string }
-  | { type: 'decimal'; value: string }
-  | { type: 'struct'; value: string };
-
-export type RawValue =
-  | { kind: 'entity'; typeName: string; iid: string }
-  | { kind: 'relation'; typeName: string; iid: string }
-  | { kind: 'attribute'; typeName: string; value: RawAttributeValue }
-  | { kind: 'type'; category: string; label: string }
-  | { kind: 'value'; value: RawAttributeValue }
-  | { kind: 'thingList'; items: RawValue[] }
-  | { kind: 'valueList'; items: RawAttributeValue[] }
-  | { kind: 'none' };
 
 /** Create a Value from a raw WASM value. */
 export function wrapValue(raw: RawValue): Value {

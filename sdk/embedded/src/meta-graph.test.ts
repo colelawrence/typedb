@@ -53,8 +53,8 @@ class MetaGraph {
 
   relation<From extends Collection<any>, To extends Collection<any>>(
     name: string,
-    from: { collection: From; role: string },
-    to: { collection: To; role: string }
+    from: RoleSpec<From>,
+    to: RoleSpec<To>
   ): Relation<From, To> {
     if (this._relations.has(name)) {
       throw new Error(`Relation "${name}" already exists`);

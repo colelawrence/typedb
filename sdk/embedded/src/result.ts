@@ -4,7 +4,19 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { Value, wrapValue, type RawValue } from './value.ts';
+import { Value, wrapValue } from './value.js';
+import type {
+  WasmQueryResult,
+  WasmErrorResult,
+  WasmOperationResult,
+  WasmQueryRow,
+  WasmError,
+  ErrorKind,
+  ErrorLocation,
+} from './wasm.js';
+
+// Re-export WASM types that are used by other modules
+export type { WasmError, ErrorKind, ErrorLocation };
 
 /**
  * A row from query results with keyed access to Values.
@@ -48,7 +60,7 @@ export interface QueryResult<T extends Row = Row> {
  */
 export function createQueryResult<T extends Row = Row>(
   columns: string[],
-  rawRows: Array<{ values: Array<{ variable: string; value: RawValue }> }>
+  rawRows: WasmQueryRow[]
 ): QueryResult<T> {
   const rows: T[] = rawRows.map((rawRow) => {
     const row: Row = {};
@@ -81,45 +93,11 @@ export function createQueryResult<T extends Row = Row>(
 }
 
 // ============================================================================
-// Internal Types (from WASM)
+// Internal Types (mapped from WASM types for internal use)
 // ============================================================================
 
-export interface WasmRow {
-  values: Array<{ variable: string; value: RawValue }>;
-}
+/** Internal query result - union of success and error cases from WASM */
+export type InternalQueryResult = WasmQueryResult | WasmErrorResult;
 
-export interface InternalQueryResult {
-  success: boolean;
-  columns: string[];
-  rows: WasmRow[];
-  rowCount: number;
-  error?: WasmError;
-}
-
-export interface InternalOperationResult {
-  success: boolean;
-  message: string;
-  rowCount?: number;
-  error?: WasmError;
-}
-
-export type ErrorKind =
-  | 'parseError'
-  | 'schemaError'
-  | 'typeError'
-  | 'dataError'
-  | 'transactionError'
-  | 'internalError';
-
-export interface ErrorLocation {
-  line: number;
-  column: number;
-  snippet?: string;
-}
-
-export interface WasmError {
-  kind: ErrorKind;
-  message: string;
-  location?: ErrorLocation;
-  hint?: string;
-}
+/** Internal operation result - union of success and error cases from WASM */
+export type InternalOperationResult = WasmOperationResult | WasmErrorResult;

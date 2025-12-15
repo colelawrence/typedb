@@ -17,6 +17,17 @@ export type {
   TransactionRead as WasmTransactionRead,
   TransactionWrite as WasmTransactionWrite,
   TransactionSchema as WasmTransactionSchema,
+  // Result types from WASM
+  QueryResult as WasmQueryResult,
+  ErrorResult as WasmErrorResult,
+  OperationResult as WasmOperationResult,
+  QueryRow as WasmQueryRow,
+  QueryRowValue as WasmQueryRowValue,
+  RawValue,
+  RawAttributeValue,
+  WasmError,
+  ErrorKind,
+  ErrorLocation,
 } from '../wasm/typedb_wasm.js';
 
 let wasmPromise: Promise<typeof import('../wasm/typedb_wasm.js')> | null = null;
