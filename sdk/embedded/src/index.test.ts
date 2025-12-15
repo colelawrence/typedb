@@ -5,7 +5,30 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { Database, ParseError } from './index.js';
+import { Database, ParseError, type StorageAdapter } from './index.js';
+
+/**
+ * In-memory storage adapter for testing persistence.
+ */
+class MemoryStorageAdapter implements StorageAdapter {
+  private snapshots = new Map<string, Uint8Array>();
+
+  async loadSnapshot(name: string): Promise<Uint8Array | null> {
+    return this.snapshots.get(name) ?? null;
+  }
+
+  async saveSnapshot(name: string, bytes: Uint8Array): Promise<void> {
+    this.snapshots.set(name, bytes);
+  }
+
+  async deleteSnapshot(name: string): Promise<void> {
+    this.snapshots.delete(name);
+  }
+
+  has(name: string): boolean {
+    return this.snapshots.has(name);
+  }
+}
 
 describe('Database', () => {
   test('open and name', async () => {
@@ -300,5 +323,191 @@ describe('Database', () => {
     expect(empty.isEmpty()).toBe(true);
     expect(empty.first()).toBeUndefined();
     expect(() => empty.firstRequired()).toThrow();
+  });
+});
+
+describe('Database Persistence', () => {
+  test('persist() saves to storage', async () => {
+    const storage = new MemoryStorageAdapter();
+    const db = await Database.open('test_persist', { storage, persistence: 'manual' });
+
+    await db.define('define entity person;');
+    await db.execute('insert $p isa person;');
+
+    // Before persist, storage should be empty
+    expect(storage.has('test_persist')).toBe(false);
+
+    // After persist, storage should have snapshot
+    await db.persist();
+    expect(storage.has('test_persist')).toBe(true);
+  });
+
+  test('data restores from storage on open', async () => {
+    const storage = new MemoryStorageAdapter();
+
+    // Create and persist database
+    {
+      const db = await Database.open('test_restore', { storage, persistence: 'manual' });
+      await db.define('define attribute name value string; entity person owns name;');
+      await db.execute('insert $p isa person, has name "Alice";');
+      await db.persist();
+    }
+
+    // Open again and verify data is restored
+    {
+      const db = await Database.open('test_restore', { storage, persistence: 'manual' });
+      const result = await db.query('match $p isa person, has name $n;');
+      expect(result.rowCount).toBe(1);
+      expect(result.rows[0].n.asString()).toBe('Alice');
+    }
+  });
+
+  test('close() auto-saves with onClose policy', async () => {
+    const storage = new MemoryStorageAdapter();
+
+    // Default persistence when storage is provided is 'onClose'
+    const db = await Database.open('test_close_save', { storage });
+    await db.define('define entity person;');
+    await db.execute('insert $p isa person;');
+
+    // Before close, storage should be empty (opened fresh)
+    expect(storage.has('test_close_save')).toBe(false);
+
+    // After close, storage should have snapshot
+    await db.close();
+    expect(storage.has('test_close_save')).toBe(true);
+  });
+
+  test('close() does not save with manual policy', async () => {
+    const storage = new MemoryStorageAdapter();
+    const db = await Database.open('test_close_no_save', { storage, persistence: 'manual' });
+
+    await db.define('define entity person;');
+    await db.execute('insert $p isa person;');
+
+    // Close without persisting
+    await db.close();
+
+    // Storage should be empty
+    expect(storage.has('test_close_no_save')).toBe(false);
+  });
+
+  test('deleteSnapshot() removes from storage', async () => {
+    const storage = new MemoryStorageAdapter();
+    const db = await Database.open('test_delete', { storage, persistence: 'manual' });
+
+    await db.define('define entity person;');
+    await db.execute('insert $p isa person;');
+    await db.persist();
+    expect(storage.has('test_delete')).toBe(true);
+
+    await db.deleteSnapshot();
+    expect(storage.has('test_delete')).toBe(false);
+  });
+
+  test('persist() throws without storage', async () => {
+    const db = await Database.open('test_no_storage');
+
+    try {
+      await db.persist();
+      expect(true).toBe(false); // Should not reach here
+    } catch (e) {
+      expect((e as Error).message).toContain('no storage adapter configured');
+    }
+  });
+
+  test('hasStorage and persistencePolicy properties', async () => {
+    // Without storage
+    const db1 = await Database.open('test_props_no_storage');
+    expect(db1.hasStorage).toBe(false);
+    expect(db1.persistencePolicy).toBe('manual');
+
+    // With storage (default policy)
+    const storage = new MemoryStorageAdapter();
+    const db2 = await Database.open('test_props_with_storage', { storage });
+    expect(db2.hasStorage).toBe(true);
+    expect(db2.persistencePolicy).toBe('onClose');
+
+    // With storage and explicit policy
+    const db3 = await Database.open('test_props_manual', { storage, persistence: 'manual' });
+    expect(db3.hasStorage).toBe(true);
+    expect(db3.persistencePolicy).toBe('manual');
+  });
+
+  test('exportSnapshot() and importSnapshot() work directly', async () => {
+    const db1 = await Database.open('test_export');
+
+    await db1.define('define attribute name value string; entity person owns name;');
+    await db1.execute('insert $p isa person, has name "Alice";');
+    await db1.execute('insert $p isa person, has name "Bob";');
+
+    // Export snapshot
+    const snapshot = await db1.exportSnapshot();
+    expect(snapshot).toBeInstanceOf(Uint8Array);
+    expect(snapshot.length).toBeGreaterThan(0);
+
+    // Create new database and import
+    const db2 = await Database.open('test_import');
+    await db2.importSnapshot(snapshot);
+
+    // Verify data was imported
+    const result = await db2.query('match $p isa person, has name $n;');
+    expect(result.rowCount).toBe(2);
+    const names = result.rows.map((row) => row.n.asString()).sort();
+    expect(names).toEqual(['Alice', 'Bob']);
+  });
+
+  test('full persistence roundtrip with schema and data', async () => {
+    const storage = new MemoryStorageAdapter();
+
+    // Create database with complex schema and data
+    {
+      const db = await Database.open('test_roundtrip', { storage, persistence: 'manual' });
+
+      await db.define(`
+        define
+        attribute name value string;
+        attribute email value string;
+        entity person owns name, owns email @key;
+        entity company owns name;
+        relation employment relates employee, relates employer;
+        person plays employment:employee;
+        company plays employment:employer;
+      `);
+
+      await db.execute('insert $p isa person, has name "Alice", has email "alice@example.com";');
+      await db.execute('insert $c isa company, has name "Acme Corp";');
+      await db.execute(`
+        match
+        $p isa person, has email "alice@example.com";
+        $c isa company, has name "Acme Corp";
+        insert (employee: $p, employer: $c) isa employment;
+      `);
+
+      await db.persist();
+    }
+
+    // Restore and verify
+    {
+      const db = await Database.open('test_roundtrip', { storage, persistence: 'manual' });
+
+      // Verify person
+      const person = await db.queryOneRequired('match $p isa person, has name $n;');
+      expect(person.n.asString()).toBe('Alice');
+
+      // Verify company
+      const company = await db.queryOneRequired('match $c isa company, has name $n;');
+      expect(company.n.asString()).toBe('Acme Corp');
+
+      // Verify relation
+      const employment = await db.queryOneRequired(`
+        match
+        $p isa person, has name $pname;
+        $c isa company, has name $cname;
+        (employee: $p, employer: $c) isa employment;
+      `);
+      expect(employment.pname.asString()).toBe('Alice');
+      expect(employment.cname.asString()).toBe('Acme Corp');
+    }
   });
 });

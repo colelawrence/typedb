@@ -289,3 +289,131 @@ fn test_schema_rollback() {
         assert!(result.is_err());
     }
 }
+
+#[test]
+fn test_snapshot_export_import_roundtrip() {
+    // Create first database with schema and data
+    let db1 = Database::new("test_snapshot_export").unwrap();
+
+    // Define schema
+    {
+        let mut tx = db1.transaction_schema(Options::default()).unwrap();
+        tx.execute("define entity person owns name, owns age; attribute name value string; attribute age value integer;")
+            .unwrap();
+        tx.commit().unwrap();
+    }
+
+    // Insert data
+    {
+        let tx = db1.transaction_write(Options::default()).unwrap();
+        tx.execute(r#"insert $p isa person, has name "Alice", has age 30;"#).unwrap();
+    }
+    {
+        let tx = db1.transaction_write(Options::default()).unwrap();
+        tx.execute(r#"insert $p isa person, has name "Bob", has age 25;"#).unwrap();
+    }
+
+    // Verify data exists
+    let count_before = {
+        let tx = db1.transaction_read(Options::default()).unwrap();
+        let results = tx.query("match $p isa person;").unwrap();
+        results.into_iter().count()
+    };
+    assert_eq!(count_before, 2, "Should have 2 persons before export");
+
+    // Export snapshot
+    let snapshot = db1.export_snapshot().unwrap();
+    assert!(!snapshot.is_empty(), "Snapshot should not be empty");
+
+    // Create new database and import snapshot
+    let mut db2 = Database::new("test_snapshot_import").unwrap();
+    db2.import_snapshot(&snapshot).unwrap();
+
+    // Verify data was restored
+    {
+        let tx = db2.transaction_read(Options::default()).unwrap();
+        let results = tx.query("match $p isa person, has name $n;").unwrap();
+        let names: Vec<_> = results.into_iter().collect();
+        assert_eq!(names.len(), 2, "Should have 2 persons after import");
+    }
+
+    // Verify specific data
+    {
+        let tx = db2.transaction_read(Options::default()).unwrap();
+        let results = tx.query(r#"match $p isa person, has name "Alice", has age $age;"#).unwrap();
+        let rows: Vec<_> = results.into_iter().collect();
+        assert_eq!(rows.len(), 1, "Should find Alice");
+
+        let row = rows[0].as_ref().unwrap();
+        let age_value = row.get("age").expect("Should have age");
+        match age_value {
+            typedb_embedded::Value::Attribute { value, .. } => match value {
+                typedb_embedded::AttributeValue::Integer(n) => {
+                    assert_eq!(*n, 30, "Alice's age should be 30");
+                }
+                other => panic!("Expected Integer, got {:?}", other),
+            },
+            other => panic!("Expected Attribute, got {:?}", other),
+        }
+    }
+}
+
+#[test]
+fn test_snapshot_empty_database() {
+    let db = Database::new("test_snapshot_empty").unwrap();
+
+    // Export empty database
+    let snapshot = db.export_snapshot().unwrap();
+
+    // Should have header at minimum
+    assert!(!snapshot.is_empty(), "Empty snapshot should still have header");
+
+    // Import into new database
+    let mut db2 = Database::new("test_snapshot_empty_import").unwrap();
+    db2.import_snapshot(&snapshot).unwrap();
+
+    // Should be able to use the database after import
+    let mut tx = db2.transaction_schema(Options::default()).unwrap();
+    tx.execute("define entity test_type;").unwrap();
+    tx.commit().unwrap();
+}
+
+#[test]
+fn test_snapshot_preserves_schema() {
+    let db1 = Database::new("test_snapshot_schema").unwrap();
+
+    // Define complex schema
+    {
+        let mut tx = db1.transaction_schema(Options::default()).unwrap();
+        tx.execute(
+            r#"define
+            entity person owns name, owns email;
+            entity company owns company_name;
+            attribute name value string;
+            attribute email value string;
+            attribute company_name value string;
+            relation employment relates employee, relates employer;
+            person plays employment:employee;
+            company plays employment:employer;
+        "#,
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    }
+
+    // Export and import
+    let snapshot = db1.export_snapshot().unwrap();
+    let mut db2 = Database::new("test_snapshot_schema_import").unwrap();
+    db2.import_snapshot(&snapshot).unwrap();
+
+    // Verify schema was preserved by inserting data that uses the schema
+    {
+        let tx = db2.transaction_write(Options::default()).unwrap();
+        tx.execute(r#"insert $p isa person, has name "Test", has email "test@example.com";"#)
+            .unwrap();
+    }
+    {
+        let tx = db2.transaction_write(Options::default()).unwrap();
+        tx.execute(r#"insert $c isa company, has company_name "Acme Corp";"#).unwrap();
+    }
+}

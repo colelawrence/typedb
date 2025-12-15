@@ -53,5 +53,13 @@ export {
   InternalError,
 } from './error.js';
 
+// Storage (persistence)
+export { IndexedDBStorage } from './storage.js';
+export type {
+  StorageAdapter,
+  StorageOptions,
+  PersistencePolicy,
+} from './storage.js';
+
 // Advanced: WASM utilities
 export { initWasm, isWasmReady } from './wasm.js';

@@ -612,6 +612,79 @@ impl Database<NoopDurabilityClient> {
             schema_write_transaction_exclusivity: Mutex::new((false, 0, VecDeque::with_capacity(100))),
         })
     }
+
+    /// Export the database as a binary snapshot.
+    ///
+    /// The snapshot contains all data stored in the database and can be
+    /// imported later with [`import_snapshot`] to restore the database state.
+    ///
+    /// # Warning
+    ///
+    /// For consistency, ensure no write or schema transactions are active
+    /// when calling this method.
+    pub fn export_snapshot(&self) -> Result<Vec<u8>, DatabaseOpenError> {
+        self.storage
+            .export_snapshot()
+            .map_err(|error| DatabaseOpenError::StorageOpen { typedb_source: error })
+    }
+
+    /// Import a binary snapshot, replacing all data in the database.
+    ///
+    /// The snapshot should have been created with [`export_snapshot`].
+    /// After import, caches are automatically rebuilt to reflect the new data.
+    ///
+    /// # Warning
+    ///
+    /// This replaces all data in the database. Ensure no transactions are
+    /// active when calling this method. If there are active transactions,
+    /// this method will panic.
+    pub fn import_snapshot(&mut self, bytes: &[u8]) -> Result<(), DatabaseOpenError> {
+        use DatabaseOpenError::{FunctionCacheInitialise, StatisticsInitialise, TypeCacheInitialise};
+
+        // Get mutable access to storage - this requires no other references exist
+        let storage_mut = Arc::get_mut(&mut self.storage)
+            .expect("Cannot import snapshot while other references to storage exist (active transactions?)");
+
+        // Import the raw data and get the watermark
+        let sequence_number = storage_mut
+            .import_snapshot(bytes)
+            .map_err(|error| DatabaseOpenError::StorageOpen { typedb_source: error })?;
+
+        // Rebuild caches to reflect the imported data
+        let type_cache =
+            Arc::new(TypeCache::new(self.storage.clone(), sequence_number).map_err(|error| TypeCacheInitialise {
+                typedb_source: error,
+            })?);
+
+        let type_manager = TypeManager::new(
+            self.definition_key_generator.clone(),
+            self.type_vertex_generator.clone(),
+            Some(type_cache.clone()),
+        );
+
+        let function_cache = Arc::new(
+            FunctionCache::new(self.storage.clone(), &type_manager, sequence_number)
+                .map_err(|error| FunctionCacheInitialise { typedb_source: error })?,
+        );
+
+        let mut thing_statistics = Statistics::new(sequence_number);
+        thing_statistics
+            .may_synchronise(&self.storage)
+            .map_err(|error| StatisticsInitialise { typedb_source: error })?;
+        let thing_statistics = Arc::new(thing_statistics);
+
+        // Update the schema with new caches
+        let mut schema_guard = self.schema.write().expect("Schema lock poisoned");
+        schema_guard.type_cache = type_cache;
+        schema_guard.function_cache = function_cache;
+        schema_guard.thing_statistics = thing_statistics.clone();
+        drop(schema_guard);
+
+        // Reset query cache
+        self.query_cache.force_reset(&thing_statistics);
+
+        Ok(())
+    }
 }
 
 #[cfg(feature = "rocksdb")]

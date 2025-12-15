@@ -108,6 +108,60 @@ impl Database {
     pub fn transaction_schema(&self, options: TransactionOptions) -> Result<TransactionSchema, Error> {
         TransactionSchema::open(self.inner.clone(), options)
     }
+
+    /// Export the database as a binary snapshot.
+    ///
+    /// The snapshot contains all data stored in the database and can be
+    /// saved to persistent storage (e.g., IndexedDB in browsers) and later
+    /// imported with [`Database::import_snapshot`].
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use typedb_embedded::Database;
+    /// let db = Database::new("mydb")?;
+    /// // ... insert data ...
+    /// let snapshot = db.export_snapshot()?;
+    /// // Save `snapshot` to persistent storage
+    /// # Ok::<(), typedb_embedded::Error>(())
+    /// ```
+    ///
+    /// # Warning
+    ///
+    /// For consistency, ensure no write or schema transactions are active
+    /// when calling this method.
+    pub fn export_snapshot(&self) -> Result<Vec<u8>, Error> {
+        self.inner.export_snapshot().map_err(Error::from)
+    }
+
+    /// Import a binary snapshot, replacing all data in the database.
+    ///
+    /// The snapshot should have been created with [`Database::export_snapshot`].
+    /// After importing, the database will contain the same data as when
+    /// the snapshot was exported.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use typedb_embedded::Database;
+    /// let mut db = Database::new("mydb")?;
+    /// // Load `snapshot` from persistent storage
+    /// # let snapshot = vec![];
+    /// db.import_snapshot(&snapshot)?;
+    /// // Database now contains the restored data
+    /// # Ok::<(), typedb_embedded::Error>(())
+    /// ```
+    ///
+    /// # Warning
+    ///
+    /// This replaces all data in the database. Ensure no transactions are
+    /// active when calling this method. If there are active transactions,
+    /// this method will panic.
+    pub fn import_snapshot(&mut self, bytes: &[u8]) -> Result<(), Error> {
+        let inner = Arc::get_mut(&mut self.inner)
+            .expect("Cannot import snapshot while other references exist (e.g., active transactions)");
+        inner.import_snapshot(bytes).map_err(Error::from)
+    }
 }
 
 impl std::fmt::Debug for Database {

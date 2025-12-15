@@ -57,6 +57,22 @@ impl IsolationManager {
         }
     }
 
+    /// Reset the isolation manager to a new watermark.
+    /// This is used after importing a snapshot to set the watermark to match the imported data.
+    ///
+    /// # Warning
+    ///
+    /// This should only be called when no transactions are active.
+    #[cfg(not(feature = "rocksdb"))]
+    pub(crate) fn reset_to_watermark(&mut self, watermark: SequenceNumber) {
+        // The next transaction will be at watermark + 1
+        let next_seq = watermark.next();
+        self.initial_sequence_number = next_seq;
+        // Create timeline that can serve reads at watermark and writes at watermark+1
+        self.timeline = Timeline::new_with_watermark(watermark, next_seq);
+        self.highest_validated_sequence_number = AtomicU64::new(watermark.number());
+    }
+
     pub(crate) fn opened_for_read(&self, sequence_number: SequenceNumber) {
         debug_assert!(
             sequence_number <= self.watermark(),
@@ -380,6 +396,15 @@ impl Timeline {
     fn new(next_sequence_number: SequenceNumber) -> Timeline {
         let windows = VecDeque::from([Arc::new(TimelineWindow::new(next_sequence_number))]);
         Timeline { windows: RwLock::new(windows), watermark: AtomicU64::new(next_sequence_number.number() - 1) }
+    }
+
+    /// Create a new timeline with a specific watermark and next sequence number.
+    /// Used after importing a snapshot to restore the correct state.
+    #[cfg(not(feature = "rocksdb"))]
+    fn new_with_watermark(watermark: SequenceNumber, next_sequence_number: SequenceNumber) -> Timeline {
+        // Create a window that covers from the watermark onwards
+        let windows = VecDeque::from([Arc::new(TimelineWindow::new(watermark))]);
+        Timeline { windows: RwLock::new(windows), watermark: AtomicU64::new(watermark.number()) }
     }
 
     fn may_free_windows(&self) {

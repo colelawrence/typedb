@@ -601,6 +601,38 @@ impl<Durability> MVCCStorage<Durability> {
     pub fn estimate_key_count(&self) -> Result<u64, StorageOpenError> {
         self.keyspaces.estimate_key_count().map_err(|source| StorageOpenError::Keyspace { source })
     }
+
+    /// Export all keyspaces as a binary snapshot.
+    ///
+    /// Only available for memory backend (non-rocksdb builds).
+    /// The snapshot can be imported later with [`import_snapshot`].
+    #[cfg(not(feature = "rocksdb"))]
+    pub fn export_snapshot(&self) -> Result<Vec<u8>, StorageOpenError> {
+        let watermark = self.snapshot_watermark().number();
+        self.keyspaces
+            .export_snapshot_with_watermark(watermark)
+            .map_err(|source| StorageOpenError::Keyspace { source })
+    }
+
+    /// Import a binary snapshot into the storage, replacing all data.
+    /// Returns the watermark from the snapshot.
+    ///
+    /// Only available for memory backend (non-rocksdb builds).
+    /// The snapshot should have been created with [`export_snapshot`].
+    ///
+    /// # Warning
+    ///
+    /// This replaces all data in the storage. Only call this when no transactions
+    /// are active.
+    #[cfg(not(feature = "rocksdb"))]
+    pub fn import_snapshot(&mut self, bytes: &[u8]) -> Result<SequenceNumber, StorageOpenError> {
+        let watermark_number = self.keyspaces
+            .import_snapshot_with_watermark(bytes)
+            .map_err(|source| StorageOpenError::Keyspace { source })?;
+        let watermark = SequenceNumber::new(watermark_number);
+        self.isolation_manager.reset_to_watermark(watermark);
+        Ok(watermark)
+    }
 }
 
 typedb_error! {

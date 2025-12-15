@@ -79,6 +79,30 @@ impl Database {
             .map(|tx| TransactionSchema { inner: Some(tx) })
             .map_err(convert_error_to_js)
     }
+
+    /// Export the database as a binary snapshot.
+    ///
+    /// Returns a Uint8Array containing the snapshot data that can be stored
+    /// persistently (e.g., in IndexedDB) and later imported with `importSnapshot`.
+    #[wasm_bindgen(js_name = exportSnapshot)]
+    pub fn export_snapshot(&self) -> Result<js_sys::Uint8Array, JsError> {
+        let bytes = self.inner.export_snapshot().map_err(convert_error_to_js)?;
+        let array = js_sys::Uint8Array::new_with_length(bytes.len() as u32);
+        array.copy_from(&bytes);
+        Ok(array)
+    }
+
+    /// Import a binary snapshot, replacing all data in the database.
+    ///
+    /// Takes a Uint8Array that was previously exported with `exportSnapshot`.
+    /// After import, caches are automatically rebuilt.
+    ///
+    /// Warning: Ensure no transactions are active when calling this method.
+    #[wasm_bindgen(js_name = importSnapshot)]
+    pub fn import_snapshot(&mut self, snapshot: &js_sys::Uint8Array) -> Result<(), JsError> {
+        let bytes = snapshot.to_vec();
+        self.inner.import_snapshot(&bytes).map_err(convert_error_to_js)
+    }
 }
 
 /// A read-only transaction.

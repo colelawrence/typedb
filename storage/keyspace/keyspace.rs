@@ -457,6 +457,134 @@ impl Keyspaces {
             Ok(total + count)
         })
     }
+
+    /// Export all keyspaces as a snapshot with watermark.
+    ///
+    /// Format v2:
+    /// - Magic bytes: "TDBSNP" (6 bytes)
+    /// - Version: 1 byte (value = 2)
+    /// - Watermark: 8 bytes (u64 LE) - the sequence number watermark
+    /// - Keyspace count: 1 byte
+    /// - For each keyspace:
+    ///   - Keyspace ID: 1 byte
+    ///   - Name length: 1 byte
+    ///   - Name bytes
+    ///   - Data length: 4 bytes (LE)
+    ///   - Data bytes (from MemoryBackend::export_data)
+    pub fn export_snapshot_with_watermark(&self, watermark: u64) -> Result<Vec<u8>, KeyspaceError> {
+        const MAGIC: &[u8] = b"TDBSNP";
+        const VERSION: u8 = 2;
+
+        let mut output = Vec::new();
+
+        // Write header
+        output.extend_from_slice(MAGIC);
+        output.push(VERSION);
+        output.extend_from_slice(&watermark.to_le_bytes());
+        output.push(self.keyspaces.len() as u8);
+
+        // Export each keyspace
+        for keyspace in &self.keyspaces {
+            let name = keyspace.name();
+            let data = keyspace.export_data()?;
+
+            // Write keyspace ID
+            output.push(keyspace.id().0);
+            // Write name length and name
+            output.push(name.len() as u8);
+            output.extend_from_slice(name.as_bytes());
+            // Write data length and data
+            output.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            output.extend_from_slice(&data);
+        }
+
+        Ok(output)
+    }
+
+    /// Import a snapshot into all keyspaces, replacing existing data.
+    /// Returns the watermark from the snapshot for isolation manager update.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if:
+    /// - Magic bytes don't match
+    /// - Version is unsupported
+    /// - Data is malformed
+    /// - Keyspace IDs don't match
+    pub fn import_snapshot_with_watermark(&self, bytes: &[u8]) -> Result<u64, KeyspaceError> {
+        const MAGIC: &[u8] = b"TDBSNP";
+
+        if bytes.len() < 16 {
+            return Err(KeyspaceError::SnapshotMalformed {
+                message: "snapshot too short for header".to_string(),
+            });
+        }
+
+        // Verify magic
+        if &bytes[0..6] != MAGIC {
+            return Err(KeyspaceError::SnapshotMalformed {
+                message: "invalid snapshot magic bytes".to_string(),
+            });
+        }
+
+        let version = bytes[6];
+        if version != 2 {
+            return Err(KeyspaceError::SnapshotMalformed {
+                message: format!("unsupported snapshot version: {} (expected 2)", version),
+            });
+        }
+
+        let watermark = u64::from_le_bytes([
+            bytes[7], bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14],
+        ]);
+
+        let keyspace_count = bytes[15] as usize;
+        let mut pos = 16;
+
+        // Import each keyspace
+        for _ in 0..keyspace_count {
+            if pos + 2 > bytes.len() {
+                return Err(KeyspaceError::SnapshotMalformed {
+                    message: "unexpected end of snapshot".to_string(),
+                });
+            }
+
+            let keyspace_id = KeyspaceId(bytes[pos]);
+            let name_len = bytes[pos + 1] as usize;
+            pos += 2;
+
+            if pos + name_len + 4 > bytes.len() {
+                return Err(KeyspaceError::SnapshotMalformed {
+                    message: "unexpected end of snapshot while reading keyspace".to_string(),
+                });
+            }
+
+            let _name = std::str::from_utf8(&bytes[pos..pos + name_len]).map_err(|_| {
+                KeyspaceError::SnapshotMalformed { message: "invalid keyspace name encoding".to_string() }
+            })?;
+            pos += name_len;
+
+            let data_len = u32::from_le_bytes([bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]]) as usize;
+            pos += 4;
+
+            if pos + data_len > bytes.len() {
+                return Err(KeyspaceError::SnapshotMalformed {
+                    message: format!("unexpected end of snapshot: need {} bytes for data", data_len),
+                });
+            }
+
+            let data = &bytes[pos..pos + data_len];
+            pos += data_len;
+
+            // Find the keyspace by ID and import
+            if let Some(keyspace_index) = self.index[keyspace_id.0 as usize] {
+                self.keyspaces[keyspace_index.0 as usize].import_data(data)?;
+            }
+            // If keyspace doesn't exist in current schema, skip it (forward compatibility)
+        }
+
+        Ok(watermark)
+    }
 }
 
 // ============================================================================
@@ -546,6 +674,16 @@ impl Keyspace {
 
     pub fn estimate_key_count(&self) -> Result<u64, KeyspaceError> {
         self.backend.estimate_key_count().map_err(|err| KeyspaceError::property("estimate_key_count", err))
+    }
+
+    /// Export the keyspace data as bytes for persistence.
+    pub fn export_data(&self) -> Result<Vec<u8>, KeyspaceError> {
+        self.backend.export_data().map_err(|err| KeyspaceError::property("export_data", err))
+    }
+
+    /// Import data into this keyspace, replacing all existing data.
+    pub fn import_data(&self, data: &[u8]) -> Result<(), KeyspaceError> {
+        self.backend.import_data(data).map_err(|err| KeyspaceError::property("import_data", err))
     }
 }
 
@@ -666,6 +804,7 @@ pub enum KeyspaceError {
     Iterate { name: &'static str, source: BackendErrorSource },
     DeleteRange { name: &'static str, source: BackendErrorSource },
     Property { name: &'static str, source: BackendErrorSource },
+    SnapshotMalformed { message: String },
 }
 
 impl KeyspaceError {
@@ -709,6 +848,7 @@ impl Error for KeyspaceError {
             Self::Iterate { source, .. } => Some(source.as_ref()),
             Self::DeleteRange { source, .. } => Some(source.as_ref()),
             Self::Property { source, .. } => Some(source.as_ref()),
+            Self::SnapshotMalformed { .. } => None,
         }
     }
 }
