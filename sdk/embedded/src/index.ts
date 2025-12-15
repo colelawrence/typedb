@@ -36,12 +36,15 @@
  */
 
 // Core
-export { Database } from './database.ts';
-export { Value } from './value.ts';
-export { ReadTransaction, SchemaTransaction } from './transaction.ts';
+export { Database } from './database.js';
+export { Value } from './value.js';
+export { ReadTransaction, SchemaTransaction } from './transaction.js';
+
+// Template literals for safe query construction
+export { typeql, TypeQL } from './template.js';
 
 // Result types
-export type { Row, QueryResult } from './result.ts';
+export type { Row, QueryResult } from './result.js';
 
 // Error types
 export {
@@ -51,15 +54,45 @@ export {
   DataError,
   TransactionError,
   InternalError,
-} from './error.ts';
+} from './error.js';
 
 // Storage (persistence)
-export { IndexedDBStorage } from './storage.ts';
+export { IndexedDBStorage } from './storage.js';
 export type {
   StorageAdapter,
   StorageOptions,
   PersistencePolicy,
-} from './storage.ts';
+} from './storage.js';
 
 // Advanced: WASM utilities
-export { initWasm, isWasmReady } from './wasm.ts';
+export { initWasm, isWasmReady } from './wasm.js';
+
+// Meta-Graph: Dynamic schema management (TanStack Table-style API)
+export {
+  createMetaGraph,
+  columnDef,
+  prop,
+  collectionToTypeQL,
+  relationToTypeQL,
+} from './meta-graph.js';
+export type {
+  ScalarKind,
+  ColumnDef,
+  ColumnsShape,
+  Cardinality,
+  RoleDef,
+  CollectionDef,
+  RelationDef,
+  MetaGraphDef,
+  MetaGraphInstance,
+  CollectionInstance,
+  RelationInstance,
+  Filter,
+  FiltersFor,
+  FilterValue,
+  RelationFilter,
+  QueryState,
+  FieldUISchema,
+  RelationUISchema,
+  CollectionUISchema,
+} from './meta-graph.js';
