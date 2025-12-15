@@ -2,5 +2,15 @@
   "name": "@phosphor/typedb-wasm",
   "version": "0.1.0",
   "license": "MPL-2.0",
-  "exports": "./src/index.ts"
+  "exports": "./src/index.ts",
+  "publish": {
+    "exclude": [
+      "!wasm/",
+      "browser-tests/",
+      "packaging-test/",
+      "**/*.test.ts",
+      "bun.lock",
+      "pnpm-lock.yaml"
+    ]
+  }
 }
