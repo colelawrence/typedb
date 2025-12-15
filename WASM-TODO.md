@@ -428,7 +428,10 @@ memory = ["database/memory", "query/memory", "storage/memory", ...]
 
 These are optional improvements tracked separately:
 
-1. **IndexedDB persistence** - Survive page reloads by serializing to IndexedDB
+1. **IndexedDB/OPFS persistence** - Survive page reloads via snapshot-based persistence
+   - **Status:** Design complete, implementation not started
+   - **See:** `WASM-TYPESCRIPT-TODO.md` section F4 for detailed implementation plan
+   - **Architecture:** Snapshot export/import in Rust, StorageAdapter in TypeScript
 2. **Web Workers** - Run queries off the main thread
 3. **Streaming results** - Return results incrementally for large queries
 4. **SharedArrayBuffer** - Multi-tab database sharing

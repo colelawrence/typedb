@@ -2,6 +2,14 @@
 
 TypeDB embedded database for JavaScript/TypeScript. Runs entirely in WebAssembly - no server required.
 
+## Features
+
+- **Zero dependencies** - Self-contained WASM module, no server needed
+- **Full TypeQL support** - Schema definitions, queries, inserts, relations
+- **Optional persistence** - Save to IndexedDB or custom storage backends
+- **Type-safe** - Full TypeScript support with typed query results
+- **Ergonomic API** - Async/await with automatic resource cleanup
+
 ## Installation
 
 ```bash
@@ -34,6 +42,66 @@ const result = await db.query('match $p isa person, has name $n, has age $a;');
 for (const row of result.rows) {
   console.log(`${row.n.asString()} is ${row.a.asInteger()} years old`);
 }
+```
+
+## Persistent Storage
+
+By default, databases are in-memory and lost on page reload. Enable persistence to save data across sessions:
+
+```typescript
+import { Database } from '@typedb/embedded';
+
+// Open with IndexedDB persistence (browser)
+const db = await Database.open('mydb', { storage: 'indexeddb' });
+
+// Data is automatically saved when you close
+await db.close();
+
+// Re-open later - data is restored!
+const db2 = await Database.open('mydb', { storage: 'indexeddb' });
+```
+
+### Persistence Options
+
+```typescript
+// Auto-save on close (default when storage is configured)
+const db = await Database.open('mydb', {
+  storage: 'indexeddb',
+  persistence: 'onClose'  // default
+});
+
+// Manual save only
+const db = await Database.open('mydb', {
+  storage: 'indexeddb',
+  persistence: 'manual'
+});
+await db.persist();  // Explicitly save
+
+// Custom storage adapter
+const db = await Database.open('mydb', {
+  storage: {
+    loadSnapshot: async (name) => { /* load from your storage */ },
+    saveSnapshot: async (name, bytes) => { /* save to your storage */ },
+    deleteSnapshot: async (name) => { /* delete from your storage */ }
+  }
+});
+```
+
+### Low-level Snapshot API
+
+For full control over persistence:
+
+```typescript
+// Export database as binary snapshot
+const snapshot = await db.exportSnapshot();
+
+// Save snapshot however you want
+await saveToMyStorage(snapshot);
+
+// Later: import into a new database
+const db2 = await Database.open('restored');
+const snapshot = await loadFromMyStorage();
+await db2.importSnapshot(snapshot);
 ```
 
 ## API
@@ -169,7 +237,8 @@ for (const row of result.rows) {
 
 ## Notes
 
-- **In-memory only**: All data is ephemeral. For persistence, serialize and restore.
+- **In-memory by default**: Data is ephemeral unless you configure a storage adapter.
+- **Optional persistence**: Use IndexedDB or custom storage adapters to persist data across sessions.
 - **Synchronous execution**: WASM operations are CPU-bound. The async API is for ergonomics.
 - **Single-threaded**: No concurrent transaction support.
 

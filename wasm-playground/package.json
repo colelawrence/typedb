@@ -1,0 +1,35 @@
+{
+  "name": "typedb-wasm-playground",
+  "version": "0.1.0",
+  "description": "TypeDB embedded database running in WebAssembly for browser-based exploration",
+  "license": "MPL-2.0",
+  "type": "module",
+  "main": "./www/pkg/wasm_playground.js",
+  "types": "./www/pkg/wasm_playground.d.ts",
+  "exports": {
+    ".": {
+      "types": "./www/pkg/wasm_playground.d.ts",
+      "import": "./www/pkg/wasm_playground.js"
+    },
+    "./wasm": "./www/pkg/wasm_playground_bg.wasm"
+  },
+  "files": [
+    "www/pkg"
+  ],
+  "scripts": {
+    "build": "./build.sh",
+    "serve": "./run.sh"
+  },
+  "keywords": [
+    "typedb",
+    "database",
+    "wasm",
+    "webassembly",
+    "graph-database",
+    "knowledge-graph"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/typedb/typedb"
+  }
+}

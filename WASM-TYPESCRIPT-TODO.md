@@ -1401,13 +1401,96 @@ for await (const row of tx.queryStream('match $p isa person;')) {
 }
 ```
 
-### F4: Persistent Storage (IndexedDB)
-Store data persistently in browser:
+### F4: Persistent Storage (IndexedDB/OPFS) ✓ COMPLETE
+
+**Status:** Complete - snapshot-based persistence with custom storage adapters.
+
+**Goal:** Enable TypeDB databases to survive browser page reloads via optional persistence.
+
+**Architecture Decision:** Snapshot-based persistence (not a new `KeyValueBackend`)
+
+The cleanest approach is:
+1. Keep `MemoryBackend` as the runtime storage (BTreeMap, synchronous)
+2. Add snapshot export/import APIs in Rust (`Database.export_snapshot() -> Vec<u8>`)
+3. Expose via wasm-bindgen to TypeScript
+4. Implement StorageAdapter abstraction in TypeScript for IndexedDB/OPFS
+
+This avoids the complexity of making `KeyValueBackend` async and keeps browser-specific logic in TypeScript.
+
+**Proposed User API:**
 ```typescript
-const db = await Database.create('mydb', { 
-  storage: 'indexeddb' 
+// In-memory only (current behavior)
+const db = await Database.open('mydb');
+
+// Persist to IndexedDB (auto-save on close)
+const db = await Database.open('mydb', { 
+  storage: 'indexeddb',
+  persistence: 'onClose'  // or 'manual' | 'onInterval'
 });
+
+// Persist to OPFS (Chromium, better for large DBs)
+const db = await Database.open('mydb', { storage: 'opfs' });
+
+// Custom storage adapter
+const db = await Database.open('mydb', {
+  storage: {
+    loadSnapshot: async (name) => { /* ... */ },
+    saveSnapshot: async (name, bytes) => { /* ... */ }
+  }
+});
+
+// Manual persistence
+await db.persist();
 ```
+
+**Implementation Steps:**
+
+| Step | Layer | Description | Status |
+|------|-------|-------------|--------|
+| F4.1 | Rust | Add `Database::export_snapshot() -> Vec<u8>` in typedb-embedded | ✓ Complete |
+| F4.2 | Rust | Add `Database::import_snapshot(&[u8])` in typedb-embedded | ✓ Complete |
+| F4.3 | WASM | Expose snapshot methods via wasm-bindgen | ✓ Complete |
+| F4.4 | TypeScript | Define `StorageAdapter` interface | ✓ Complete |
+| F4.5 | TypeScript | Implement IndexedDB adapter | ✓ Complete |
+| F4.6 | TypeScript | Implement OPFS adapter (optional) | Deferred |
+| F4.7 | TypeScript | Update `Database.open()` with storage options | ✓ Complete |
+| F4.8 | TypeScript | Add persistence policy (onClose, manual) | ✓ Complete |
+| F4.9 | Tests | Add persistence tests (Bun) | ✓ Complete (9 tests) |
+
+**Implementation Notes:**
+- Snapshot format v2 includes magic bytes "TDBSNP", version, watermark, and keyspace data
+- MVCC watermark tracking ensures data consistency after import
+- TypeCache, FunctionCache, and Statistics are rebuilt after snapshot import
+- 24 total TypeScript tests passing (15 core + 9 persistence)
+
+**Snapshot Format (internal):**
+```
+Header: b"TDBSNP" + version (1 byte) + engine version
+For each keyspace:
+  - Keyspace name length (u32) + bytes
+  - Entry count (u64)
+  - For each entry: key_len (u32) + val_len (u32) + key + value
+```
+
+**IndexedDB vs OPFS Trade-offs:**
+
+| Feature | IndexedDB | OPFS |
+|---------|-----------|------|
+| Browser support | Universal | Chromium-based only |
+| API complexity | Simpler | More complex |
+| Large blob performance | Good | Better (streaming) |
+| Recommendation | Default | Large DB optimization |
+
+**Prior Art:**
+- DuckDB-WASM: Snapshot/file persisted via IndexedDB/OPFS
+- SQLite-WASM: JS VFS over OPFS
+- Dexie: IndexedDB patterns for schema versioning
+
+**Risks & Mitigations:**
+1. **Snapshot size:** Use `estimate_size_bytes()` to warn on large DBs
+2. **Main-thread blocking:** Acceptable for infrequent snapshots; Web Workers for future
+3. **Consistency:** Only allow snapshot when no transactions are open
+4. **Storage quotas:** Surface errors as typed `PersistenceError`
 
 ---
 

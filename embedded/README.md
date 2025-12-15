@@ -5,9 +5,10 @@ An embeddable TypeDB database for Rust applications, including WebAssembly targe
 ## Features
 
 - **Pure Rust**: No C/C++ dependencies, works on any target including WASM
-- **In-Memory**: All data stored in memory (ephemeral)
+- **In-Memory**: All data stored in memory with optional snapshot persistence
 - **Full TypeQL**: Complete TypeQL support for schema and queries
 - **Embeddable**: Use as a library in your Rust application
+- **Snapshot Export/Import**: Save and restore database state as binary snapshots
 
 ## Quick Start
 
@@ -85,11 +86,41 @@ Compile for WASM:
 cargo build --target wasm32-unknown-unknown
 ```
 
+## Snapshot Persistence
+
+Export and import database state as binary snapshots:
+
+```rust
+use typedb_embedded::Database;
+
+fn main() -> Result<(), Error> {
+    let db = Database::new("mydb")?;
+
+    // ... define schema and insert data ...
+
+    // Export database to binary snapshot
+    let snapshot: Vec<u8> = db.export_snapshot()?;
+
+    // Save snapshot to file, send over network, etc.
+    std::fs::write("backup.snapshot", &snapshot)?;
+
+    // Later: restore from snapshot
+    let mut db2 = Database::new("restored")?;
+    let snapshot = std::fs::read("backup.snapshot")?;
+    db2.import_snapshot(&snapshot)?;
+
+    // db2 now contains all the data from db
+    Ok(())
+}
+```
+
+**Note**: Ensure no transactions are active when calling `import_snapshot()`.
+
 ## Limitations
 
-- **Ephemeral storage**: All data is lost when the database is dropped
+- **In-memory storage**: Data is stored in memory; use snapshots for persistence
 - **Single-query write transactions**: Each write transaction executes one query and auto-commits
-- **No persistence**: Data cannot survive process restarts
+- **Snapshot for persistence**: Use `export_snapshot()`/`import_snapshot()` to save/restore data
 
 ## License
 
