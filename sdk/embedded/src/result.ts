@@ -7,7 +7,6 @@
 import { Value, wrapValue } from './value.js';
 import type {
   WasmQueryResult,
-  WasmErrorResult,
   WasmOperationResult,
   WasmQueryRow,
   WasmError,
@@ -96,8 +95,8 @@ export function createQueryResult<T extends Row = Row>(
 // Internal Types (mapped from WASM types for internal use)
 // ============================================================================
 
-/** Internal query result - union of success and error cases from WASM */
-export type InternalQueryResult = WasmQueryResult | WasmErrorResult;
+/** Internal query result from WASM (errors are embedded in the result) */
+export type InternalQueryResult = WasmQueryResult;
 
-/** Internal operation result - union of success and error cases from WASM */
-export type InternalOperationResult = WasmOperationResult | WasmErrorResult;
+/** Internal operation result from WASM (errors are embedded in the result) */
+export type InternalOperationResult = WasmOperationResult;

@@ -348,7 +348,7 @@ export const DEFAULT_UNORDERED_OWNS_CARDINALITY: CardinalityConstraint = {
  */
 export const DEFAULT_ORDERED_OWNS_CARDINALITY: CardinalityConstraint = {
   min: 0,
-  max: null,
+  max: undefined,
 };
 
 /**
@@ -357,7 +357,7 @@ export const DEFAULT_ORDERED_OWNS_CARDINALITY: CardinalityConstraint = {
  */
 export const DEFAULT_PLAYS_CARDINALITY: CardinalityConstraint = {
   min: 0,
-  max: null,
+  max: undefined,
 };
 
 /**
@@ -375,7 +375,7 @@ export const DEFAULT_UNORDERED_RELATES_CARDINALITY: CardinalityConstraint = {
  */
 export const DEFAULT_ORDERED_RELATES_CARDINALITY: CardinalityConstraint = {
   min: 0,
-  max: null,
+  max: undefined,
 };
 
 /**

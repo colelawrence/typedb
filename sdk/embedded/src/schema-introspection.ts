@@ -20,7 +20,6 @@ import type {
   ScalarKind,
   CollectionDef,
   RelationDef,
-  ColumnsShape,
 } from './meta-graph.js';
 
 // ============================================================================

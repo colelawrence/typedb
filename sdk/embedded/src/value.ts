@@ -4,7 +4,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import type { RawValue, RawAttributeValue } from './wasm.js';
+import type { RawValue, RawAttributeValue } from './wasm-types.js';
 
 // Re-export for use by other modules
 export type { RawValue, RawAttributeValue };
@@ -197,7 +197,7 @@ export class Value {
   /** Get items from a ThingList. Throws if not a ThingList. */
   asThingList(): Value[] {
     if (this.raw.kind === 'thingList') {
-      return this.raw.items.map((item) => new Value(item));
+      return this.raw.items.map((item: RawValue) => new Value(item));
     }
     throw new TypeError(`Cannot get thingList from ${this.raw.kind}`);
   }
@@ -228,11 +228,15 @@ export class Value {
       case 'value':
         return { kind: 'value', value: this.raw.value.value };
       case 'thingList':
-        return { kind: 'thingList', items: this.raw.items.map((i) => new Value(i).toJSON()) };
+        return { kind: 'thingList', items: this.raw.items.map((i: RawValue) => new Value(i).toJSON()) };
       case 'valueList':
-        return { kind: 'valueList', items: this.raw.items.map((i) => i.value) };
+        return { kind: 'valueList', items: this.raw.items.map((i: RawAttributeValue) => i.value) };
       case 'none':
         return null;
+      default: {
+        const _exhaustive: never = this.raw;
+        return _exhaustive;
+      }
     }
   }
 
@@ -250,11 +254,15 @@ export class Value {
       case 'value':
         return String(this.raw.value.value);
       case 'thingList':
-        return `[${this.raw.items.map((i) => new Value(i).toString()).join(', ')}]`;
+        return `[${this.raw.items.map((i: RawValue) => new Value(i).toString()).join(', ')}]`;
       case 'valueList':
-        return `[${this.raw.items.map((i) => String(i.value)).join(', ')}]`;
+        return `[${this.raw.items.map((i: RawAttributeValue) => String(i.value)).join(', ')}]`;
       case 'none':
         return 'none';
+      default: {
+        const _exhaustive: never = this.raw;
+        return String(_exhaustive);
+      }
     }
   }
 
