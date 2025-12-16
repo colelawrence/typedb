@@ -33,9 +33,9 @@ mod convert;
 mod error;
 pub mod types;
 
-use convert::convert_value;
+use convert::{convert_schema, convert_value};
 use error::{convert_error, convert_error_to_js};
-use types::{OperationResult, QueryResult, WasmColumnValue, WasmRow};
+use types::{OperationResult, QueryResult, SchemaResult, WasmColumnValue, WasmRow};
 
 /// A TypeDB database instance.
 #[wasm_bindgen]
@@ -119,6 +119,12 @@ impl TransactionRead {
         serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
     }
 
+    /// Get the complete schema of the database.
+    pub fn schema(&self) -> JsValue {
+        let result = self.schema_internal();
+        serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+    }
+
     /// Close the transaction.
     pub fn close(self) {
         self.inner.close();
@@ -160,6 +166,13 @@ impl TransactionRead {
                 QueryResult { success: true, columns, rows, row_count, error: None }
             }
             Err(e) => QueryResult { success: false, columns: vec![], rows: vec![], row_count: 0, error: Some(convert_error(&e)) },
+        }
+    }
+
+    fn schema_internal(&self) -> SchemaResult {
+        match self.inner.schema() {
+            Ok(schema) => SchemaResult { success: true, schema: Some(convert_schema(&schema)), error: None },
+            Err(e) => SchemaResult { success: false, schema: None, error: Some(convert_error(&e)) },
         }
     }
 }

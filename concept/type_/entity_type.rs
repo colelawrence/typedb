@@ -256,7 +256,9 @@ impl EntityType {
             EntityTypeAnnotation::Abstract(_) => {
                 type_manager.set_entity_type_annotation_abstract(snapshot, thing_manager, *self, storage_counters)?
             }
-            EntityTypeAnnotation::Doc(_) => {}
+            EntityTypeAnnotation::Doc(doc) => {
+                type_manager.set_annotation_doc(snapshot, *self, doc)?
+            }
         };
         Ok(())
     }
@@ -271,7 +273,7 @@ impl EntityType {
             .map_err(|typedb_source| ConceptWriteError::Annotation { typedb_source })?;
         match entity_annotation {
             EntityTypeAnnotation::Abstract(_) => type_manager.unset_entity_type_annotation_abstract(snapshot, *self)?,
-            EntityTypeAnnotation::Doc(_) => {}
+            EntityTypeAnnotation::Doc(_) => type_manager.unset_annotation_doc(snapshot, *self)?,
         }
 
         Ok(())

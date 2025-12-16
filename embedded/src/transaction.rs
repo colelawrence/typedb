@@ -20,6 +20,7 @@ use storage::{durability_client::NoopDurabilityClient, snapshot::CommittableSnap
 use crate::{
     error::Error,
     result::{AttributeValue, Row, Value},
+    schema::{extract_schema_from_transaction, SchemaSummary},
 };
 
 type InnerDatabase = database::Database<NoopDurabilityClient>;
@@ -58,6 +59,29 @@ impl TransactionRead {
     /// ```
     pub fn query(&self, query: &str) -> Result<QueryResultIterator, Error> {
         execute_read_query(&self.inner, query)
+    }
+
+    /// Get the complete schema of the database.
+    ///
+    /// Returns structured information about all entity types, relation types,
+    /// attribute types, and role types, including their supertypes, owned
+    /// attributes, played roles, and value types.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use typedb_embedded::{Database, Options};
+    /// # let db = Database::new("mydb").unwrap();
+    /// # let tx = db.transaction_read(Options::default()).unwrap();
+    /// let schema = tx.schema()?;
+    /// for entity in &schema.entity_types {
+    ///     println!("Entity: {}", entity.label);
+    /// }
+    /// # Ok::<(), typedb_embedded::Error>(())
+    /// ```
+    pub fn schema(&self) -> Result<SchemaSummary, Error> {
+        let snapshot = self.inner.snapshot.as_ref();
+        extract_schema_from_transaction(snapshot, &self.inner.type_manager)
     }
 
     /// Close the transaction without committing.

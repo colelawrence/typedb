@@ -406,7 +406,9 @@ impl AttributeType {
             AttributeTypeAnnotation::Values(values) => {
                 type_manager.set_annotation_values(snapshot, thing_manager, *self, values, storage_counters)?
             }
-            AttributeTypeAnnotation::Doc(_) => {}
+            AttributeTypeAnnotation::Doc(doc) => {
+                type_manager.set_annotation_doc(snapshot, *self, doc)?
+            }
         };
         Ok(())
     }
@@ -427,7 +429,7 @@ impl AttributeType {
             AttributeTypeAnnotation::Regex(_) => type_manager.unset_annotation_regex(snapshot, *self)?,
             AttributeTypeAnnotation::Range(_) => type_manager.unset_annotation_range(snapshot, *self)?,
             AttributeTypeAnnotation::Values(_) => type_manager.unset_annotation_values(snapshot, *self)?,
-            AttributeTypeAnnotation::Doc(_) => {}
+            AttributeTypeAnnotation::Doc(_) => type_manager.unset_annotation_doc(snapshot, *self)?,
         }
         Ok(())
     }

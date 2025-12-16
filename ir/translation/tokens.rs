@@ -38,7 +38,17 @@ pub fn translate_annotation(typeql_kind: &typeql::Annotation) -> Result<Annotati
         typeql::Annotation::Cascade(_) => Annotation::Cascade(AnnotationCascade),
         typeql::Annotation::Distinct(_) => Annotation::Distinct(AnnotationDistinct),
         typeql::Annotation::Doc(doc) => {
-            let description = doc.description.as_ref().map(|s| s.value.clone());
+            let description = doc
+                .description
+                .as_ref()
+                .map(|s| {
+                    s.unescape().map_err(|e| LiteralParseError::CannotUnescapeString {
+                        literal: s.clone(),
+                        source_span: doc.span(),
+                        typedb_source: e,
+                    })
+                })
+                .transpose()?;
             let mut metadata = std::collections::BTreeMap::new();
             for (ident, literal) in &doc.kwargs {
                 let key = ident.as_str_unchecked().to_string();

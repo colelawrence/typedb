@@ -2504,6 +2504,25 @@ impl TypeManager {
         self.unset_type_annotation(snapshot, type_, annotation_category)
     }
 
+    pub(crate) fn set_annotation_doc(
+        &self,
+        snapshot: &mut impl WritableSnapshot,
+        type_: impl KindAPI,
+        doc: AnnotationDoc,
+    ) -> Result<(), Box<ConceptWriteError>> {
+        let annotation = Annotation::Doc(doc);
+        self.set_type_annotation(snapshot, type_, annotation)
+    }
+
+    pub(crate) fn unset_annotation_doc(
+        &self,
+        snapshot: &mut impl WritableSnapshot,
+        type_: impl KindAPI,
+    ) -> Result<(), Box<ConceptWriteError>> {
+        let annotation_category = AnnotationCategory::Doc;
+        self.unset_type_annotation(snapshot, type_, annotation_category)
+    }
+
     pub(crate) fn set_relates_specialise(
         &self,
         snapshot: &mut impl WritableSnapshot,

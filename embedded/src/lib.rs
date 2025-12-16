@@ -74,6 +74,7 @@
 mod database_api;
 mod error;
 pub mod result;
+pub mod schema;
 mod transaction;
 
 pub mod common_tests;
@@ -82,4 +83,9 @@ pub use database_api::Database;
 pub use error::Error;
 pub use options::TransactionOptions as Options;
 pub use result::{AttributeValue, Row, Value};
+pub use schema::{
+    AttributeTypeSchema, CardinalitySchema, EntityTypeSchema, OrderingSchema, OwnsSchema,
+    PlaysSchema, RangeConstraintSchema, RelatesSchema, RelationTypeSchema, RoleTypeSchema,
+    SchemaSummary, ValueConstraintSchema, ValueTypeSchema,
+};
 pub use transaction::{QueryResultIterator, TransactionRead, TransactionSchema, TransactionWrite};

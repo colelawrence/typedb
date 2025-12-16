@@ -264,7 +264,9 @@ impl RelationType {
             RelationTypeAnnotation::Cascade(_) => {
                 type_manager.set_annotation_cascade(snapshot, thing_manager, *self)?
             }
-            RelationTypeAnnotation::Doc(_) => {}
+            RelationTypeAnnotation::Doc(doc) => {
+                type_manager.set_annotation_doc(snapshot, *self, doc)?
+            }
         };
         Ok(())
     }
@@ -282,7 +284,7 @@ impl RelationType {
                 type_manager.unset_relation_type_annotation_abstract(snapshot, *self)?
             }
             RelationTypeAnnotation::Cascade(_) => type_manager.unset_annotation_cascade(snapshot, *self)?,
-            RelationTypeAnnotation::Doc(_) => {}
+            RelationTypeAnnotation::Doc(_) => type_manager.unset_annotation_doc(snapshot, *self)?,
         }
         Ok(())
     }

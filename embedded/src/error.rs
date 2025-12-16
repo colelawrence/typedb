@@ -21,6 +21,8 @@ pub enum Error {
     Query(String),
     /// Error committing transaction.
     Commit(String),
+    /// Error during schema introspection.
+    Schema(String),
 }
 
 impl fmt::Display for Error {
@@ -31,6 +33,7 @@ impl fmt::Display for Error {
             Error::Parse(msg) => write!(f, "Parse error: {}", msg),
             Error::Query(msg) => write!(f, "Query error: {}", msg),
             Error::Commit(msg) => write!(f, "Commit error: {}", msg),
+            Error::Schema(msg) => write!(f, "Schema error: {}", msg),
         }
     }
 }

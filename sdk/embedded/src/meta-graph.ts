@@ -53,6 +53,7 @@
  */
 
 import type { Database } from './database.js';
+import { schemaFromDefinition, persistSchemaMetadata } from './schema-introspection.js';
 
 // ============================================================================
 // Core Types
@@ -408,7 +409,7 @@ export interface MetaGraphInstance<
   listRelations(): Array<{ name: string; from: string; to: string }>;
 
   toTypeQLDefine(): string;
-  apply(db: Database): Promise<void>;
+  apply(db: Database, opts?: { persistMetadata?: boolean }): Promise<void>;
 
   getUISchema(collectionName: keyof Collections & string): CollectionUISchema;
   buildQuery(collectionName: keyof Collections & string, state: QueryState): string;
@@ -473,8 +474,15 @@ export function createMetaGraph<
     return `define ${parts.join(' ')}`;
   };
 
-  const apply = async (db: Database): Promise<void> => {
+  const apply = async (
+    db: Database,
+    opts: { persistMetadata?: boolean } = {}
+  ): Promise<void> => {
     await db.define(toTypeQLDefine());
+    if (opts.persistMetadata) {
+      const schema = schemaFromDefinition(def);
+      await persistSchemaMetadata(db, schema);
+    }
   };
 
   const getUISchema = (collectionName: keyof Collections & string): CollectionUISchema => {

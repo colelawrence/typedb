@@ -12,6 +12,7 @@ import type {
 import type { InternalQueryResult, InternalOperationResult, QueryResult, Row } from './result.js';
 import { createQueryResult } from './result.js';
 import { createError, TransactionError } from './error.js';
+import type { SchemaSummary, InternalSchemaResult } from './schema-types.js';
 
 /**
  * A read-only transaction for querying data.
@@ -53,6 +54,31 @@ export class ReadTransaction implements AsyncDisposable {
   async queryOneRequired<T extends Row = Row>(query: string): Promise<T> {
     const result = await this.query<T>(query);
     return result.firstRequired();
+  }
+
+  /**
+   * Get the complete schema of the database.
+   *
+   * Returns structured information about all entity types, relation types,
+   * attribute types, and role types, including their supertypes, owned
+   * attributes, played roles, and value types.
+   *
+   * @example
+   * ```typescript
+   * const tx = await db.read();
+   * const schema = await tx.schema();
+   * for (const entity of schema.entityTypes) {
+   *   console.log(`Entity: ${entity.label}`);
+   * }
+   * ```
+   */
+  async schema(): Promise<SchemaSummary> {
+    this.#ensureOpen();
+    const raw = (this.wasmTx as any).schema() as InternalSchemaResult;
+    if (!raw.success) {
+      throw createError(raw.error as any, 'schema');
+    }
+    return raw.schema!;
   }
 
   /**

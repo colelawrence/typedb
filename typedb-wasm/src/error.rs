@@ -37,6 +37,9 @@ pub fn convert_error(error: &typedb_embedded::Error) -> WasmError {
         typedb_embedded::Error::Commit(_) => {
             (ErrorKind::TransactionError, Some("Commit failed - transaction may have been invalidated".to_string()))
         }
+        typedb_embedded::Error::Schema(_) => {
+            (ErrorKind::SchemaError, Some("Schema introspection error".to_string()))
+        }
     };
 
     let location = extract_error_location(&message);
