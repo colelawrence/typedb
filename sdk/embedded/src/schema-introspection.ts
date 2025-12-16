@@ -5,12 +5,17 @@
  */
 
 /**
- * Schema Introspection - Extract schema information from MetaGraph definitions or databases.
+ * MetaGraph Schema - A simplified view of TypeDB schema for MetaGraph use cases.
  *
- * Provides three main functions:
- * - schemaFromDefinition(graph) - Pure extraction from MetaGraph definition (complete info)
- * - schemaFromDatabase(db, opts) - Query-based introspection from existing database
- * - introspectSchema(db, opts) - Unified wrapper trying sources in priority order
+ * This module provides functions to build, project, and resolve MetaGraphSchema:
+ *
+ * - `buildMetaGraphSchema(def|graph)` - Pure extraction from MetaGraph definition (no I/O)
+ * - `projectMetaGraphSchema(summary)` - Transform native SchemaSummary to MetaGraphSchema
+ * - `introspectMetaGraphSchema(db)` - Hit the DB, return MetaGraphSchema via native introspection
+ * - `resolveMetaGraphSchema(db, opts)` - Smart resolver: prefer graph, then stored, then introspect
+ *
+ * MetaGraphSchema is a *view* over the full TypeDB schema (SchemaSummary), simplified
+ * for UI components, query builders, and code generation.
  */
 
 import type { Database } from './database.js';
@@ -21,65 +26,121 @@ import type {
   CollectionDef,
   RelationDef,
 } from './meta-graph.js';
+import type {
+  SchemaSummary,
+  ValueType,
+} from './schema-types.js';
 
 // ============================================================================
-// SchemaBundle Types
+// MetaGraphSchema Types
 // ============================================================================
 
-export interface AttributeSchema {
+/**
+ * MetaGraph attribute schema - simplified view of an attribute type.
+ */
+export interface MetaGraphAttributeSchema {
+  /** Full TypeDB attribute type label, e.g. "col_tasks__title". */
   typeName: string;
+  /** Logical MetaGraph collection name, if inferred ("tasks"). */
   collectionName: string | null;
+  /** Logical property/column name, if inferred ("title"). */
   propertyName: string | null;
+  /** Narrowed MetaGraph scalar kind for UI/query helpers. */
   kind: ScalarKind | 'unknown';
+  /** Native value type from SchemaSummary, when known. */
+  valueType?: ValueType;
+  /** Whether this field is optional at the MetaGraph level. */
   optional: boolean;
 }
 
-export interface EntitySchema {
+/**
+ * MetaGraph entity schema - simplified view of an entity type.
+ */
+export interface MetaGraphEntitySchema {
+  /** Full TypeDB entity type label, e.g. "col_tasks". */
   typeName: string;
+  /** Logical MetaGraph collection name, e.g. "tasks". */
   collectionName: string | null;
+  /** Attribute type labels owned by this entity. */
   attributes: string[];
 }
 
-export interface RoleSchema {
+/**
+ * MetaGraph role schema - simplified role information.
+ */
+export interface MetaGraphRoleSchema {
+  /** Role name, e.g. "task". */
   roleName: string;
+  /** Player entity type label, e.g. "col_tasks". */
   playerTypeName: string;
+  /** Simplified cardinality for MetaGraph relations. */
   cardinality: 'zeroOrOne' | 'zeroOrMany';
 }
 
-export interface RelationSchema {
+/**
+ * MetaGraph relation schema - simplified view of a relation type.
+ */
+export interface MetaGraphRelationSchema {
+  /** Full relation type label, e.g. "rel_belongs_to". */
   typeName: string;
+  /** Logical MetaGraph relation name, e.g. "belongs_to". */
   relationName: string | null;
-  roles: RoleSchema[];
+  /** Roles in this relation. */
+  roles: MetaGraphRoleSchema[];
 }
 
-export interface SchemaBundle {
-  entities: EntitySchema[];
-  relations: RelationSchema[];
-  attributes: AttributeSchema[];
-  metadata?: {
-    source: 'definition' | 'database' | 'stored';
-    timestamp?: string;
+/**
+ * Complete MetaGraph schema - a simplified view of TypeDB schema.
+ *
+ * This is NOT the full TypeDB schema (use SchemaSummary for that).
+ * This is a projection optimized for MetaGraph use cases.
+ */
+export interface MetaGraphSchema {
+  entities: MetaGraphEntitySchema[];
+  relations: MetaGraphRelationSchema[];
+  attributes: MetaGraphAttributeSchema[];
+  metadata: {
+    /** Where this schema came from. */
+    source: 'metagraph-definition' | 'native-schema' | 'stored';
+    /** When this schema was generated. */
+    timestamp: string;
+    /** Optional version tag. */
     version?: string;
   };
 }
 
 // ============================================================================
-// schemaFromDefinition - Pure function from MetaGraph definition
+// buildMetaGraphSchema - Pure function from MetaGraph definition
 // ============================================================================
 
-export function schemaFromDefinition<
+/**
+ * Build a MetaGraphSchema from a MetaGraph definition or instance.
+ *
+ * This is a pure function with no I/O - it extracts schema from the
+ * MetaGraph configuration you already have in TypeScript.
+ *
+ * @example
+ * ```typescript
+ * const schema = buildMetaGraphSchema(myGraph);
+ * // or
+ * const schema = buildMetaGraphSchema(myGraphDef);
+ * ```
+ */
+export function buildMetaGraphSchema<
   C extends Record<string, CollectionDef>,
   R extends Record<string, RelationDef>,
->(def: MetaGraphDef<C, R>): SchemaBundle {
-  const entities: EntitySchema[] = [];
-  const attributes: AttributeSchema[] = [];
-  const relations: RelationSchema[] = [];
+>(source: MetaGraphDef<C, R> | MetaGraphInstance<C, R>): MetaGraphSchema {
+  const def: MetaGraphDef<C, R> = 'def' in source ? source.def : source;
+
+  const entities: MetaGraphEntitySchema[] = [];
+  const attributes: MetaGraphAttributeSchema[] = [];
+  const relations: MetaGraphRelationSchema[] = [];
 
   for (const [collectionName, collectionDef] of Object.entries(def.collections)) {
     const typeName = `col_${collectionName}`;
     const attrNames: string[] = [];
 
-    for (const [propName, propDef] of Object.entries(collectionDef.columns)) {
+    for (const [propName, propDef] of Object.entries((collectionDef as CollectionDef).columns)) {
       const attrTypeName = `${typeName}__${propName}`;
       attrNames.push(attrTypeName);
 
@@ -88,6 +149,7 @@ export function schemaFromDefinition<
         collectionName,
         propertyName: propName,
         kind: propDef.kind,
+        valueType: scalarKindToValueType(propDef.kind),
         optional: propDef.optional ?? false,
       });
     }
@@ -101,22 +163,22 @@ export function schemaFromDefinition<
 
   for (const [relationName, relationDef] of Object.entries(def.relations ?? {})) {
     const typeName = `rel_${relationName}`;
-    const fromTypeName = `col_${relationDef.from.collection}`;
-    const toTypeName = `col_${relationDef.to.collection}`;
+    const fromTypeName = `col_${(relationDef as RelationDef).from.collection}`;
+    const toTypeName = `col_${(relationDef as RelationDef).to.collection}`;
 
     relations.push({
       typeName,
       relationName,
       roles: [
         {
-          roleName: relationDef.from.role,
+          roleName: (relationDef as RelationDef).from.role,
           playerTypeName: fromTypeName,
-          cardinality: relationDef.from.card ?? 'zeroOrMany',
+          cardinality: (relationDef as RelationDef).from.card ?? 'zeroOrMany',
         },
         {
-          roleName: relationDef.to.role,
+          roleName: (relationDef as RelationDef).to.role,
           playerTypeName: toTypeName,
-          cardinality: relationDef.to.card ?? 'zeroOrMany',
+          cardinality: (relationDef as RelationDef).to.card ?? 'zeroOrMany',
         },
       ],
     });
@@ -127,160 +189,121 @@ export function schemaFromDefinition<
     relations,
     attributes,
     metadata: {
-      source: 'definition',
+      source: 'metagraph-definition',
       timestamp: new Date().toISOString(),
     },
   };
 }
 
-export function schemaFromGraph(graph: MetaGraphInstance<any, any>): SchemaBundle {
-  return schemaFromDefinition(graph.def);
-}
-
 // ============================================================================
-// schemaFromDatabase - Query-based introspection
+// projectMetaGraphSchema - Transform SchemaSummary to MetaGraphSchema
 // ============================================================================
 
-export interface SchemaFromDatabaseOptions {
-  sampleForValueTypes?: boolean;
-  metaGraphPrefix?: boolean;
+/**
+ * Options for projecting a MetaGraphSchema from SchemaSummary.
+ */
+export interface ProjectMetaGraphSchemaOptions {
+  /**
+   * Only include types that follow MetaGraph naming conventions
+   * (entities "col_*", relations "rel_*", attributes "col_*__*").
+   * Default: true.
+   */
+  filterToMetaGraphTypes?: boolean;
 }
 
-export async function schemaFromDatabase(
-  db: Database,
-  opts: SchemaFromDatabaseOptions = {}
-): Promise<SchemaBundle> {
-  const { sampleForValueTypes = true, metaGraphPrefix = true } = opts;
+/**
+ * Project a MetaGraphSchema from a native SchemaSummary.
+ *
+ * This is a pure function that transforms the full TypeDB schema
+ * into a simplified MetaGraph view. No database I/O.
+ *
+ * @example
+ * ```typescript
+ * await using tx = await db.read();
+ * const summary = await tx.schema();
+ * const mgSchema = projectMetaGraphSchema(summary);
+ * ```
+ */
+export function projectMetaGraphSchema(
+  summary: SchemaSummary,
+  opts: ProjectMetaGraphSchemaOptions = {}
+): MetaGraphSchema {
+  const { filterToMetaGraphTypes = true } = opts;
 
-  const entities: EntitySchema[] = [];
-  const attributes: AttributeSchema[] = [];
-  const relations: RelationSchema[] = [];
+  const entities: MetaGraphEntitySchema[] = [];
+  const attributes: MetaGraphAttributeSchema[] = [];
+  const relations: MetaGraphRelationSchema[] = [];
 
-  const entityResult = await db.query('match entity $x;');
-  const entityLabels: string[] = [];
-  for (const row of entityResult.rows) {
-    const label = row.x?.label as string | undefined;
-    if (label) {
-      if (!metaGraphPrefix || label.startsWith('col_')) {
-        entityLabels.push(label);
-      }
+  const attrLabels = new Set<string>();
+
+  for (const attr of summary.attributeTypes) {
+    if (filterToMetaGraphTypes && !/^col_[^_]+__.+$/.test(attr.label)) {
+      continue;
     }
-  }
 
-  const attrResult = await db.query('match attribute $x;');
-  const attrLabels: string[] = [];
-  for (const row of attrResult.rows) {
-    const label = row.x?.label as string | undefined;
-    if (label) {
-      attrLabels.push(label);
-    }
-  }
+    attrLabels.add(attr.label);
+    const parsed = parseMetaGraphAttrLabel(attr.label);
+    const scalarKind = valueTypeToScalarKind(attr.valueType);
 
-  const relResult = await db.query('match relation $x;');
-  const relLabels: string[] = [];
-  for (const row of relResult.rows) {
-    const label = row.x?.label as string | undefined;
-    if (label) {
-      if (!metaGraphPrefix || label.startsWith('rel_')) {
-        relLabels.push(label);
-      }
-    }
-  }
-
-  const ownershipMap = new Map<string, string[]>();
-  const ownsResult = await db.query('match $e owns $a;');
-  for (const row of ownsResult.rows) {
-    const entityLabel = row.e?.label as string | undefined;
-    const attrLabel = row.a?.label as string | undefined;
-    if (entityLabel && attrLabel) {
-      if (!ownershipMap.has(entityLabel)) {
-        ownershipMap.set(entityLabel, []);
-      }
-      ownershipMap.get(entityLabel)!.push(attrLabel);
-    }
-  }
-
-  const valueTypeCache = new Map<string, ScalarKind | 'unknown'>();
-  if (sampleForValueTypes) {
-    for (const attrLabel of attrLabels) {
-      try {
-        const sampleResult = await db.query(`match $x isa ${attrLabel};`);
-        if (sampleResult.rowCount > 0) {
-          const x = sampleResult.rows[0].x;
-          if (x) {
-            const kind = inferValueType(x);
-            valueTypeCache.set(attrLabel, kind);
-          }
-        }
-      } catch {
-        valueTypeCache.set(attrLabel, 'unknown');
-      }
-    }
-  }
-
-  for (const attrLabel of attrLabels) {
-    const parsed = parseAttributeName(attrLabel);
     attributes.push({
-      typeName: attrLabel,
+      typeName: attr.label,
       collectionName: parsed?.collectionName ?? null,
       propertyName: parsed?.propertyName ?? null,
-      kind: valueTypeCache.get(attrLabel) ?? 'unknown',
-      optional: false,
+      kind: scalarKind ?? 'unknown',
+      valueType: attr.valueType,
+      optional: true,
     });
   }
 
-  for (const entityLabel of entityLabels) {
-    const collectionName = entityLabel.startsWith('col_') ? entityLabel.slice(4) : null;
+  for (const entity of summary.entityTypes) {
+    if (filterToMetaGraphTypes && !entity.label.startsWith('col_')) {
+      continue;
+    }
+
+    const collectionName = entity.label.startsWith('col_')
+      ? entity.label.slice(4)
+      : null;
+
+    const ownedAttrs = entity.owns
+      .map((o) => o.attribute)
+      .filter((a) => attrLabels.has(a));
+
     entities.push({
-      typeName: entityLabel,
+      typeName: entity.label,
       collectionName,
-      attributes: ownershipMap.get(entityLabel) ?? [],
+      attributes: ownedAttrs,
     });
   }
 
-  const roleMap = new Map<string, string[]>();
-  const relatesResult = await db.query('match $r relates $role;');
-  for (const row of relatesResult.rows) {
-    const relLabel = row.r?.label as string | undefined;
-    const roleLabel = row.role?.label as string | undefined;
-    if (relLabel && roleLabel) {
-      if (!roleMap.has(relLabel)) {
-        roleMap.set(relLabel, []);
-      }
-      roleMap.get(relLabel)!.push(roleLabel);
+  const relationPlayersByRole = new Map<string, string>();
+  for (const e of summary.entityTypes) {
+    for (const p of e.plays) {
+      relationPlayersByRole.set(p.role, e.label);
     }
   }
 
-  const playsMap = new Map<string, Map<string, string>>();
-  const playsResult = await db.query('match $e plays $role;');
-  for (const row of playsResult.rows) {
-    const entityLabel = row.e?.label as string | undefined;
-    const roleLabel = row.role?.label as string | undefined;
-    if (entityLabel && roleLabel) {
-      const parts = roleLabel.split(':');
-      if (parts.length === 2) {
-        const [relTypeName, roleName] = parts;
-        if (!playsMap.has(relTypeName)) {
-          playsMap.set(relTypeName, new Map());
-        }
-        playsMap.get(relTypeName)!.set(roleName, entityLabel);
-      }
+  for (const rel of summary.relationTypes) {
+    if (filterToMetaGraphTypes && !rel.label.startsWith('rel_')) {
+      continue;
     }
-  }
 
-  for (const relLabel of relLabels) {
-    const relationName = relLabel.startsWith('rel_') ? relLabel.slice(4) : null;
-    const roleNames = roleMap.get(relLabel) ?? [];
-    const playerMap = playsMap.get(relLabel) ?? new Map();
+    const relationName = rel.label.startsWith('rel_')
+      ? rel.label.slice(4)
+      : null;
 
-    const roles: RoleSchema[] = roleNames.map((roleName) => ({
-      roleName,
-      playerTypeName: playerMap.get(roleName) ?? 'unknown',
-      cardinality: 'zeroOrMany' as const,
-    }));
+    const roles: MetaGraphRoleSchema[] = rel.relates.map((r) => {
+      const fullRoleLabel = `${rel.label}:${r.role}`;
+      const playerTypeName = relationPlayersByRole.get(fullRoleLabel) ?? 'unknown';
+
+      return {
+        roleName: r.role,
+        playerTypeName,
+        cardinality: r.cardinality.max === 1 ? 'zeroOrOne' as const : 'zeroOrMany' as const,
+      };
+    });
 
     relations.push({
-      typeName: relLabel,
+      typeName: rel.label,
       relationName,
       roles,
     });
@@ -291,129 +314,160 @@ export async function schemaFromDatabase(
     relations,
     attributes,
     metadata: {
-      source: 'database',
+      source: 'native-schema',
       timestamp: new Date().toISOString(),
     },
   };
 }
 
-function parseAttributeName(
-  attrLabel: string
-): { collectionName: string; propertyName: string } | null {
-  const match = attrLabel.match(/^col_([^_]+)__(.+)$/);
-  if (match) {
-    return { collectionName: match[1], propertyName: match[2] };
-  }
-  return null;
-}
-
-function inferValueType(value: any): ScalarKind | 'unknown' {
-  if (!value) return 'unknown';
-
-  let extracted: any;
-  if (typeof value.asString === 'function') {
-    try {
-      extracted = value.asString();
-      if (typeof extracted === 'string') {
-        if (/^\d{4}-\d{2}-\d{2}T/.test(extracted)) {
-          return 'datetime';
-        }
-        return 'string';
-      }
-    } catch {}
-  }
-  if (typeof value.asBoolean === 'function') {
-    try {
-      extracted = value.asBoolean();
-      if (typeof extracted === 'boolean') return 'boolean';
-    } catch {}
-  }
-  if (typeof value.asInteger === 'function') {
-    try {
-      extracted = value.asInteger();
-      if (typeof extracted === 'number' || typeof extracted === 'bigint') return 'integer';
-    } catch {}
-  }
-  if (typeof value.asDouble === 'function') {
-    try {
-      extracted = value.asDouble();
-      if (typeof extracted === 'number') return 'double';
-    } catch {}
-  }
-  if (typeof value.asDatetime === 'function') {
-    try {
-      extracted = value.asDatetime();
-      if (extracted) return 'datetime';
-    } catch {}
-  }
-
-  return 'unknown';
-}
-
 // ============================================================================
-// introspectSchema - Unified wrapper
+// introspectMetaGraphSchema - Database introspection
 // ============================================================================
 
-export interface IntrospectSchemaOptions {
-  graph?: MetaGraphInstance<any, any>;
-  sampleForValueTypes?: boolean;
-  metaGraphPrefix?: boolean;
-}
+/**
+ * Options for introspecting a MetaGraphSchema from the database.
+ */
+export interface IntrospectMetaGraphSchemaOptions extends ProjectMetaGraphSchemaOptions {}
 
-export async function introspectSchema(
+/**
+ * Introspect a MetaGraphSchema from the database using native schema introspection.
+ *
+ * This opens a read transaction, gets the native SchemaSummary, and projects
+ * it to MetaGraphSchema.
+ *
+ * @example
+ * ```typescript
+ * const schema = await introspectMetaGraphSchema(db);
+ * ```
+ */
+export async function introspectMetaGraphSchema(
   db: Database,
-  opts: IntrospectSchemaOptions = {}
-): Promise<SchemaBundle> {
-  if (opts.graph) {
-    return schemaFromGraph(opts.graph);
+  opts: IntrospectMetaGraphSchemaOptions = {}
+): Promise<MetaGraphSchema> {
+  await using tx = await db.read();
+  const summary = await tx.schema();
+  return projectMetaGraphSchema(summary, opts);
+}
+
+// ============================================================================
+// resolveMetaGraphSchema - Smart resolver
+// ============================================================================
+
+/**
+ * Options for resolving a MetaGraphSchema.
+ */
+export interface ResolveMetaGraphSchemaOptions extends IntrospectMetaGraphSchemaOptions {
+  /** Optional MetaGraph instance; if provided, we trust it as the source of truth. */
+  graph?: MetaGraphInstance<any, any>;
+  /**
+   * Whether to consult stored MetaGraphSchema before falling back to
+   * database schema introspection. Default: true.
+   */
+  preferStored?: boolean;
+}
+
+/**
+ * Resolve a MetaGraphSchema using the best available source:
+ *
+ * 1. MetaGraph instance (if provided) - highest priority, no I/O
+ * 2. Stored MetaGraphSchema snapshot (if preferStored) - from database
+ * 3. Live database schema introspection - SchemaSummary → MetaGraphSchema
+ *
+ * @example
+ * ```typescript
+ * // With a MetaGraph instance - fastest, no I/O
+ * const schema = await resolveMetaGraphSchema(db, { graph: myGraph });
+ *
+ * // Without - will check stored, then introspect
+ * const schema = await resolveMetaGraphSchema(db);
+ * ```
+ */
+export async function resolveMetaGraphSchema(
+  db: Database,
+  opts: ResolveMetaGraphSchemaOptions = {}
+): Promise<MetaGraphSchema> {
+  const { graph, preferStored = true, ...introspectOpts } = opts;
+
+  if (graph) {
+    return buildMetaGraphSchema(graph);
   }
 
-  return schemaFromDatabase(db, {
-    sampleForValueTypes: opts.sampleForValueTypes ?? true,
-    metaGraphPrefix: opts.metaGraphPrefix ?? true,
-  });
+  if (preferStored) {
+    const stored = await loadMetaGraphSchema(db);
+    if (stored) return stored;
+  }
+
+  return introspectMetaGraphSchema(db, introspectOpts);
 }
 
 // ============================================================================
-// Schema Metadata Persistence
+// MetaGraph Schema Persistence
 // ============================================================================
 
-const SCHEMA_METADATA_ENTITY = 'metagraph_meta';
-const SCHEMA_METADATA_ATTR = 'metagraph_schema_json';
+const METAGRAPH_SCHEMA_ENTITY = 'metagraph_meta';
+const METAGRAPH_SCHEMA_ATTR = 'metagraph_schema_json';
 
-export function generateSchemaMetadataTypeQL(): string {
-  return `attribute ${SCHEMA_METADATA_ATTR} value string; entity ${SCHEMA_METADATA_ENTITY}, owns ${SCHEMA_METADATA_ATTR};`;
+/**
+ * Generate the TypeQL to define the MetaGraph schema storage types.
+ */
+export function generateMetaGraphSchemaTypeQL(): string {
+  return `attribute ${METAGRAPH_SCHEMA_ATTR} value string; entity ${METAGRAPH_SCHEMA_ENTITY}, owns ${METAGRAPH_SCHEMA_ATTR};`;
 }
 
-export async function persistSchemaMetadata(db: Database, schema: SchemaBundle): Promise<void> {
+/**
+ * Save a MetaGraphSchema snapshot to the database.
+ *
+ * This stores the schema as JSON in a special entity, allowing it to be
+ * loaded later without re-introspecting the database.
+ */
+export async function saveMetaGraphSchema(
+  db: Database,
+  schema: MetaGraphSchema
+): Promise<void> {
   const json = JSON.stringify(schema);
   try {
     await db.define(
-      `define attribute ${SCHEMA_METADATA_ATTR} value string; entity ${SCHEMA_METADATA_ENTITY}, owns ${SCHEMA_METADATA_ATTR};`
+      `define attribute ${METAGRAPH_SCHEMA_ATTR} value string; entity ${METAGRAPH_SCHEMA_ENTITY}, owns ${METAGRAPH_SCHEMA_ATTR};`
     );
   } catch {
     // Types may already exist
   }
 
   try {
-    await db.execute(`match $x isa ${SCHEMA_METADATA_ENTITY}; delete $x isa ${SCHEMA_METADATA_ENTITY};`);
+    await db.execute(
+      `match $x isa ${METAGRAPH_SCHEMA_ENTITY}; delete $x isa ${METAGRAPH_SCHEMA_ENTITY};`
+    );
   } catch {
     // May not exist yet
   }
 
   const escaped = json.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  await db.execute(`insert $x isa ${SCHEMA_METADATA_ENTITY}, has ${SCHEMA_METADATA_ATTR} "${escaped}";`);
+  await db.execute(
+    `insert $x isa ${METAGRAPH_SCHEMA_ENTITY}, has ${METAGRAPH_SCHEMA_ATTR} "${escaped}";`
+  );
 }
 
-export async function loadSchemaMetadata(db: Database): Promise<SchemaBundle | null> {
+/**
+ * Load a previously stored MetaGraphSchema snapshot from the database.
+ *
+ * Returns null if no stored schema is found.
+ */
+export async function loadMetaGraphSchema(
+  db: Database
+): Promise<MetaGraphSchema | null> {
   try {
-    const result = await db.query(`match $x isa ${SCHEMA_METADATA_ENTITY}, has ${SCHEMA_METADATA_ATTR} $s;`);
+    const result = await db.query(
+      `match $x isa ${METAGRAPH_SCHEMA_ENTITY}, has ${METAGRAPH_SCHEMA_ATTR} $s;`
+    );
     if (result.rowCount > 0) {
       const s = result.rows[0].s;
       if (s && typeof s.asString === 'function') {
         const json = s.asString();
-        const parsed = JSON.parse(json) as SchemaBundle;
-        parsed.metadata = { ...parsed.metadata, source: 'stored' };
+        const parsed = JSON.parse(json) as MetaGraphSchema;
+        parsed.metadata = {
+          ...parsed.metadata,
+          source: 'stored',
+        };
         return parsed;
       }
     }
@@ -421,4 +475,50 @@ export async function loadSchemaMetadata(db: Database): Promise<SchemaBundle | n
     // Metadata not available
   }
   return null;
+}
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+function parseMetaGraphAttrLabel(
+  label: string
+): { collectionName: string; propertyName: string } | null {
+  const match = label.match(/^col_([^_]+)__(.+)$/);
+  return match ? { collectionName: match[1], propertyName: match[2] } : null;
+}
+
+function valueTypeToScalarKind(vt: ValueType | undefined): ScalarKind | undefined {
+  switch (vt) {
+    case 'string':
+      return 'string';
+    case 'boolean':
+      return 'boolean';
+    case 'integer':
+      return 'integer';
+    case 'double':
+    case 'decimal':
+      return 'double';
+    case 'datetime':
+    case 'datetime-tz':
+    case 'date':
+      return 'datetime';
+    default:
+      return undefined;
+  }
+}
+
+function scalarKindToValueType(kind: ScalarKind): ValueType {
+  switch (kind) {
+    case 'string':
+      return 'string';
+    case 'boolean':
+      return 'boolean';
+    case 'integer':
+      return 'integer';
+    case 'double':
+      return 'double';
+    case 'datetime':
+      return 'datetime';
+  }
 }

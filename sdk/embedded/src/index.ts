@@ -97,23 +97,25 @@ export type {
   CollectionUISchema,
 } from './meta-graph.js';
 
-// Schema Introspection (TypeQL-based, higher-level for MetaGraph)
+// MetaGraph Schema (simplified view of TypeDB schema for MetaGraph use cases)
 export {
-  schemaFromDefinition,
-  schemaFromGraph,
-  schemaFromDatabase,
-  introspectSchema,
-  persistSchemaMetadata,
-  loadSchemaMetadata,
+  buildMetaGraphSchema,
+  projectMetaGraphSchema,
+  introspectMetaGraphSchema,
+  resolveMetaGraphSchema,
+  saveMetaGraphSchema,
+  loadMetaGraphSchema,
+  generateMetaGraphSchemaTypeQL,
 } from './schema-introspection.js';
 export type {
-  SchemaBundle,
-  EntitySchema,
-  RelationSchema,
-  RoleSchema,
-  AttributeSchema,
-  SchemaFromDatabaseOptions,
-  IntrospectSchemaOptions,
+  MetaGraphSchema,
+  MetaGraphEntitySchema,
+  MetaGraphRelationSchema,
+  MetaGraphRoleSchema,
+  MetaGraphAttributeSchema,
+  ProjectMetaGraphSchemaOptions,
+  IntrospectMetaGraphSchemaOptions,
+  ResolveMetaGraphSchemaOptions,
 } from './schema-introspection.js';
 
 // Native Schema Introspection (from Rust core via WASM)

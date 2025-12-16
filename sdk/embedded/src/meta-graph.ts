@@ -53,7 +53,7 @@
  */
 
 import type { Database } from './database.js';
-import { schemaFromDefinition, persistSchemaMetadata } from './schema-introspection.js';
+import { buildMetaGraphSchema, saveMetaGraphSchema } from './schema-introspection.js';
 
 // ============================================================================
 // Core Types
@@ -480,8 +480,8 @@ export function createMetaGraph<
   ): Promise<void> => {
     await db.define(toTypeQLDefine());
     if (opts.persistMetadata) {
-      const schema = schemaFromDefinition(def);
-      await persistSchemaMetadata(db, schema);
+      const schema = buildMetaGraphSchema(def);
+      await saveMetaGraphSchema(db, schema);
     }
   };
 

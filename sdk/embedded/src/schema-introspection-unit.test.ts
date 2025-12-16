@@ -8,18 +8,18 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from './index.ts';
 import { createMetaGraph, columnDef } from './meta-graph.ts';
 import {
-  schemaFromDefinition,
-  schemaFromGraph,
-  schemaFromDatabase,
-  introspectSchema,
-  persistSchemaMetadata,
-  loadSchemaMetadata,
+  buildMetaGraphSchema,
+  projectMetaGraphSchema,
+  introspectMetaGraphSchema,
+  resolveMetaGraphSchema,
+  saveMetaGraphSchema,
+  loadMetaGraphSchema,
 } from './schema-introspection.ts';
 
-describe('Schema Introspection', () => {
-  describe('schemaFromDefinition', () => {
+describe('MetaGraph Schema', () => {
+  describe('buildMetaGraphSchema', () => {
     test('extracts entities from definition', () => {
-      const schema = schemaFromDefinition({
+      const schema = buildMetaGraphSchema({
         collections: {
           tasks: {
             columns: {
@@ -44,7 +44,7 @@ describe('Schema Introspection', () => {
     });
 
     test('extracts attributes with value types', () => {
-      const schema = schemaFromDefinition({
+      const schema = buildMetaGraphSchema({
         collections: {
           tasks: {
             columns: {
@@ -78,7 +78,7 @@ describe('Schema Introspection', () => {
     });
 
     test('extracts relations with roles', () => {
-      const schema = schemaFromDefinition({
+      const schema = buildMetaGraphSchema({
         collections: {
           tasks: { columns: { title: columnDef.string() } },
           projects: { columns: { name: columnDef.string() } },
@@ -103,17 +103,15 @@ describe('Schema Introspection', () => {
     });
 
     test('includes metadata with source', () => {
-      const schema = schemaFromDefinition({
+      const schema = buildMetaGraphSchema({
         collections: { tasks: { columns: { title: columnDef.string() } } },
       });
 
-      expect(schema.metadata?.source).toBe('definition');
-      expect(schema.metadata?.timestamp).toBeDefined();
+      expect(schema.metadata.source).toBe('metagraph-definition');
+      expect(schema.metadata.timestamp).toBeDefined();
     });
-  });
 
-  describe('schemaFromGraph', () => {
-    test('extracts schema from MetaGraph instance', () => {
+    test('works with MetaGraph instance', () => {
       const graph = createMetaGraph({
         collections: {
           users: {
@@ -125,7 +123,7 @@ describe('Schema Introspection', () => {
         },
       });
 
-      const schema = schemaFromGraph(graph);
+      const schema = buildMetaGraphSchema(graph);
 
       expect(schema.entities).toHaveLength(1);
       expect(schema.entities[0].collectionName).toBe('users');
@@ -133,9 +131,9 @@ describe('Schema Introspection', () => {
     });
   });
 
-  describe('schemaFromDatabase', () => {
-    test('introspects entity types from database', async () => {
-      const db = await Database.open('introspect_entities');
+  describe('projectMetaGraphSchema', () => {
+    test('projects from SchemaSummary to MetaGraphSchema', async () => {
+      const db = await Database.open('project_schema');
 
       const graph = createMetaGraph({
         collections: {
@@ -154,59 +152,16 @@ describe('Schema Introspection', () => {
       });
       await graph.apply(db);
 
-      const schema = await schemaFromDatabase(db);
+      await using tx = await db.read();
+      const summary = await tx.schema();
+      const schema = projectMetaGraphSchema(summary);
 
       expect(schema.entities.map((e) => e.typeName).sort()).toEqual(['col_projects', 'col_tasks']);
-      expect(schema.metadata?.source).toBe('database');
+      expect(schema.metadata.source).toBe('native-schema');
     });
 
-    test('introspects attributes and ownership', async () => {
-      const db = await Database.open('introspect_attrs');
-
-      const graph = createMetaGraph({
-        collections: {
-          tasks: {
-            columns: {
-              title: columnDef.string(),
-              priority: columnDef.integer(),
-            },
-          },
-        },
-      });
-      await graph.apply(db);
-
-      const schema = await schemaFromDatabase(db);
-
-      const tasksEntity = schema.entities.find((e) => e.typeName === 'col_tasks');
-      expect(tasksEntity?.attributes.sort()).toEqual(['col_tasks__priority', 'col_tasks__title']);
-    });
-
-    test('introspects relations and roles', async () => {
-      const db = await Database.open('introspect_rels');
-
-      const graph = createMetaGraph({
-        collections: {
-          tasks: { columns: { title: columnDef.string() } },
-          projects: { columns: { name: columnDef.string() } },
-        },
-        relations: {
-          belongs_to: {
-            from: { collection: 'tasks', role: 'task' },
-            to: { collection: 'projects', role: 'project' },
-          },
-        },
-      });
-      await graph.apply(db);
-
-      const schema = await schemaFromDatabase(db);
-
-      expect(schema.relations).toHaveLength(1);
-      expect(schema.relations[0].typeName).toBe('rel_belongs_to');
-      expect(schema.relations[0].roles.map((r) => r.roleName).sort()).toEqual(['project', 'task']);
-    });
-
-    test('infers value types from instance data', async () => {
-      const db = await Database.open('introspect_value_types');
+    test('extracts value types from native schema', async () => {
+      const db = await Database.open('project_value_types');
 
       const graph = createMetaGraph({
         collections: {
@@ -222,11 +177,9 @@ describe('Schema Introspection', () => {
       });
       await graph.apply(db);
 
-      await graph
-        .collection('items')
-        .insertRecord(db, { name: 'Widget', count: 10, price: 19.99, active: true });
-
-      const schema = await schemaFromDatabase(db, { sampleForValueTypes: true });
+      await using tx = await db.read();
+      const summary = await tx.schema();
+      const schema = projectMetaGraphSchema(summary);
 
       const nameAttr = schema.attributes.find((a) => a.typeName === 'col_items__name');
       const countAttr = schema.attributes.find((a) => a.typeName === 'col_items__count');
@@ -234,35 +187,126 @@ describe('Schema Introspection', () => {
       const activeAttr = schema.attributes.find((a) => a.typeName === 'col_items__active');
 
       expect(nameAttr?.kind).toBe('string');
+      expect(nameAttr?.valueType).toBe('string');
       expect(countAttr?.kind).toBe('integer');
       expect(priceAttr?.kind).toBe('double');
       expect(activeAttr?.kind).toBe('boolean');
     });
 
-    test('returns unknown for attributes without data', async () => {
-      const db = await Database.open('introspect_no_data');
+    test('extracts ownership from native schema', async () => {
+      const db = await Database.open('project_ownership');
 
       const graph = createMetaGraph({
         collections: {
-          empty: {
+          tasks: {
             columns: {
-              field: columnDef.string(),
+              title: columnDef.string(),
+              priority: columnDef.integer(),
             },
           },
         },
       });
       await graph.apply(db);
 
-      const schema = await schemaFromDatabase(db, { sampleForValueTypes: true });
+      await using tx = await db.read();
+      const summary = await tx.schema();
+      const schema = projectMetaGraphSchema(summary);
 
-      const fieldAttr = schema.attributes.find((a) => a.typeName === 'col_empty__field');
-      expect(fieldAttr?.kind).toBe('unknown');
+      const tasksEntity = schema.entities.find((e) => e.typeName === 'col_tasks');
+      expect(tasksEntity?.attributes.sort()).toEqual(['col_tasks__priority', 'col_tasks__title']);
+    });
+
+    test('extracts relations from native schema', async () => {
+      const db = await Database.open('project_relations');
+
+      const graph = createMetaGraph({
+        collections: {
+          tasks: { columns: { title: columnDef.string() } },
+          projects: { columns: { name: columnDef.string() } },
+        },
+        relations: {
+          belongs_to: {
+            from: { collection: 'tasks', role: 'task' },
+            to: { collection: 'projects', role: 'project' },
+          },
+        },
+      });
+      await graph.apply(db);
+
+      await using tx = await db.read();
+      const summary = await tx.schema();
+      const schema = projectMetaGraphSchema(summary);
+
+      expect(schema.relations).toHaveLength(1);
+      expect(schema.relations[0].typeName).toBe('rel_belongs_to');
+      expect(schema.relations[0].roles.map((r) => r.roleName).sort()).toEqual(['project', 'task']);
+    });
+
+    test('filters to MetaGraph types by default', async () => {
+      const db = await Database.open('project_filter');
+
+      await db.define(`
+        define
+        attribute name value string;
+        entity person owns name;
+        attribute col_tasks__title value string;
+        entity col_tasks owns col_tasks__title;
+      `);
+
+      await using tx = await db.read();
+      const summary = await tx.schema();
+      const schema = projectMetaGraphSchema(summary);
+
+      expect(schema.entities.map((e) => e.typeName)).toEqual(['col_tasks']);
+      expect(schema.attributes.map((a) => a.typeName)).toEqual(['col_tasks__title']);
+    });
+
+    test('includes all types when filter disabled', async () => {
+      const db = await Database.open('project_no_filter');
+
+      await db.define(`
+        define
+        attribute name value string;
+        entity person owns name;
+        attribute col_tasks__title value string;
+        entity col_tasks owns col_tasks__title;
+      `);
+
+      await using tx = await db.read();
+      const summary = await tx.schema();
+      const schema = projectMetaGraphSchema(summary, { filterToMetaGraphTypes: false });
+
+      expect(schema.entities.map((e) => e.typeName).sort()).toEqual(['col_tasks', 'person']);
     });
   });
 
-  describe('introspectSchema', () => {
-    test('uses graph when provided', async () => {
-      const db = await Database.open('introspect_with_graph');
+  describe('introspectMetaGraphSchema', () => {
+    test('introspects schema from database', async () => {
+      const db = await Database.open('introspect_db');
+
+      const graph = createMetaGraph({
+        collections: {
+          tasks: {
+            columns: {
+              title: columnDef.string(),
+              priority: columnDef.integer(),
+            },
+          },
+        },
+      });
+      await graph.apply(db);
+
+      const schema = await introspectMetaGraphSchema(db);
+
+      expect(schema.entities).toHaveLength(1);
+      expect(schema.entities[0].typeName).toBe('col_tasks');
+      expect(schema.metadata.source).toBe('native-schema');
+    });
+  });
+
+  describe('resolveMetaGraphSchema', () => {
+    test('uses graph when provided (highest priority)', async () => {
+      const db = await Database.open('resolve_with_graph');
 
       const graph = createMetaGraph({
         collections: {
@@ -276,16 +320,16 @@ describe('Schema Introspection', () => {
       });
       await graph.apply(db);
 
-      const schema = await introspectSchema(db, { graph });
+      const schema = await resolveMetaGraphSchema(db, { graph });
 
-      expect(schema.metadata?.source).toBe('definition');
+      expect(schema.metadata.source).toBe('metagraph-definition');
       const priorityAttr = schema.attributes.find((a) => a.propertyName === 'priority');
       expect(priorityAttr?.optional).toBe(true);
       expect(priorityAttr?.kind).toBe('integer');
     });
 
-    test('falls back to database when no graph', async () => {
-      const db = await Database.open('introspect_fallback');
+    test('uses stored schema when available', async () => {
+      const db = await Database.open('resolve_stored');
 
       const graph = createMetaGraph({
         collections: {
@@ -294,16 +338,34 @@ describe('Schema Introspection', () => {
       });
       await graph.apply(db);
 
-      const schema = await introspectSchema(db);
+      const originalSchema = buildMetaGraphSchema(graph);
+      await saveMetaGraphSchema(db, originalSchema);
 
-      expect(schema.metadata?.source).toBe('database');
+      const schema = await resolveMetaGraphSchema(db);
+
+      expect(schema.metadata.source).toBe('stored');
+    });
+
+    test('falls back to introspection when no stored schema', async () => {
+      const db = await Database.open('resolve_fallback');
+
+      const graph = createMetaGraph({
+        collections: {
+          tasks: { columns: { title: columnDef.string() } },
+        },
+      });
+      await graph.apply(db);
+
+      const schema = await resolveMetaGraphSchema(db, { preferStored: false });
+
+      expect(schema.metadata.source).toBe('native-schema');
       expect(schema.entities).toHaveLength(1);
     });
   });
 
-  describe('metadata persistence', () => {
-    test('persists and loads schema metadata', async () => {
-      const db = await Database.open('persist_metadata');
+  describe('schema persistence', () => {
+    test('saves and loads schema', async () => {
+      const db = await Database.open('persist_schema');
 
       const graph = createMetaGraph({
         collections: {
@@ -323,22 +385,22 @@ describe('Schema Introspection', () => {
       });
       await graph.apply(db);
 
-      const originalSchema = schemaFromGraph(graph);
-      await persistSchemaMetadata(db, originalSchema);
+      const originalSchema = buildMetaGraphSchema(graph);
+      await saveMetaGraphSchema(db, originalSchema);
 
-      const loaded = await loadSchemaMetadata(db);
+      const loaded = await loadMetaGraphSchema(db);
 
       expect(loaded).not.toBeNull();
-      expect(loaded?.metadata?.source).toBe('stored');
+      expect(loaded?.metadata.source).toBe('stored');
       expect(loaded?.entities).toHaveLength(1);
       expect(loaded?.relations).toHaveLength(1);
       expect(loaded?.attributes.find((a) => a.propertyName === 'priority')?.optional).toBe(true);
     });
 
-    test('returns null when no metadata stored', async () => {
-      const db = await Database.open('no_metadata');
+    test('returns null when no schema stored', async () => {
+      const db = await Database.open('no_stored_schema');
 
-      const loaded = await loadSchemaMetadata(db);
+      const loaded = await loadMetaGraphSchema(db);
       expect(loaded).toBeNull();
     });
 
@@ -357,7 +419,7 @@ describe('Schema Introspection', () => {
       });
       await graph.apply(db, { persistMetadata: true });
 
-      const loaded = await loadSchemaMetadata(db);
+      const loaded = await loadMetaGraphSchema(db);
 
       expect(loaded).not.toBeNull();
       expect(loaded?.entities[0].collectionName).toBe('users');
