@@ -9,6 +9,11 @@
  *
  * This module handles lazy loading and initialization of the WASM module.
  * The WASM is only loaded when first needed (e.g., when creating a Database).
+ *
+ * Supports multiple environments:
+ * - Browser: Uses fetch() to load the .wasm file
+ * - Node.js/Bun: Uses fs.readFileSync to load the .wasm file
+ * - Test environments: Auto-detects and uses appropriate method
  */
 
 // Re-export the WASM types we need
@@ -34,9 +39,55 @@ let wasmPromise: Promise<typeof import('../wasm/typedb_wasm.js')> | null = null;
 let wasmModule: typeof import('../wasm/typedb_wasm.js') | null = null;
 
 /**
+ * Detect if we're running in a Node.js-like environment (Node, Bun, etc.)
+ */
+function isNodeLike(): boolean {
+  return (
+    typeof process !== 'undefined' &&
+    process.versions != null &&
+    (process.versions.node != null || process.versions.bun != null)
+  );
+}
+
+/**
+ * Load WASM bytes in Node.js/Bun environment
+ */
+async function loadWasmBytesNode(): Promise<Uint8Array> {
+  // Dynamic import to avoid bundler issues in browser
+  const { readFileSync } = await import('fs');
+  const { fileURLToPath } = await import('url');
+  const { dirname, join } = await import('path');
+
+  // Get the path to this module and find the wasm file relative to it
+  const currentFile = fileURLToPath(import.meta.url);
+  const currentDir = dirname(currentFile);
+  const wasmPath = join(currentDir, '..', 'wasm', 'typedb_wasm_bg.wasm');
+
+  return new Uint8Array(readFileSync(wasmPath));
+}
+
+/**
+ * Load WASM in browser environment using fetch
+ */
+async function loadWasmBrowser(): Promise<typeof import('../wasm/typedb_wasm.js')> {
+  const wasm = await import('../wasm/typedb_wasm.js');
+  await wasm.default();
+  return wasm;
+}
+
+/**
+ * Load WASM in Node.js environment using fs
+ */
+async function loadWasmNode(): Promise<typeof import('../wasm/typedb_wasm.js')> {
+  const wasm = await import('../wasm/typedb_wasm.js');
+  const bytes = await loadWasmBytesNode();
+  wasm.initSync(bytes);
+  return wasm;
+}
+
+/**
  * Initialize the WASM module.
- * This is called automatically by Database.create(), but can be called
- * manually to preload the WASM module.
+ * Automatically detects the environment and uses the appropriate loading method.
  */
 export async function initWasm(): Promise<typeof import('../wasm/typedb_wasm.js')> {
   if (wasmModule) {
@@ -45,15 +96,29 @@ export async function initWasm(): Promise<typeof import('../wasm/typedb_wasm.js'
 
   if (!wasmPromise) {
     wasmPromise = (async () => {
-      const wasm = await import('../wasm/typedb_wasm.js');
-      // For wasm-pack web target, call the default init function
-      await wasm.default();
+      const wasm = isNodeLike() ? await loadWasmNode() : await loadWasmBrowser();
       wasmModule = wasm;
       return wasm;
     })();
   }
 
   return wasmPromise;
+}
+
+/**
+ * Initialize WASM with custom bytes.
+ * Use this when you need to provide the WASM binary from a custom source.
+ */
+export async function initWasmWithBytes(
+  bytes: Uint8Array | ArrayBuffer
+): Promise<typeof import('../wasm/typedb_wasm.js')> {
+  if (wasmModule) return wasmModule;
+
+  const wasm = await import('../wasm/typedb_wasm.js');
+  wasm.initSync(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
+  wasmModule = wasm;
+  wasmPromise = Promise.resolve(wasm);
+  return wasm;
 }
 
 /**

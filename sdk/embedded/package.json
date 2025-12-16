@@ -13,7 +13,10 @@
   },
   "files": [
     "dist",
-    "wasm"
+    "wasm/typedb_wasm.js",
+    "wasm/typedb_wasm.d.ts",
+    "wasm/typedb_wasm_bg.js",
+    "wasm/typedb_wasm_bg.wasm"
   ],
   "scripts": {
     "build:wasm": "cd ../../typedb-wasm && wasm-pack build --target web --out-dir ../sdk/embedded/wasm",

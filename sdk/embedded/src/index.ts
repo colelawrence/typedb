@@ -65,7 +65,7 @@ export type {
 } from './storage.js';
 
 // Advanced: WASM utilities
-export { initWasm, isWasmReady } from './wasm.js';
+export { initWasm, initWasmWithBytes, isWasmReady } from './wasm.js';
 
 // Meta-Graph: Dynamic schema management (TanStack Table-style API)
 export {
@@ -96,3 +96,35 @@ export type {
   RelationUISchema,
   CollectionUISchema,
 } from './meta-graph.js';
+
+// Schema Introspection (TypeQL-based, higher-level for MetaGraph)
+export {
+  schemaFromDefinition,
+  schemaFromGraph,
+  schemaFromDatabase,
+  introspectSchema,
+  persistSchemaMetadata,
+  loadSchemaMetadata,
+} from './schema-introspection.js';
+export type {
+  SchemaBundle,
+  EntitySchema,
+  RelationSchema,
+  RoleSchema,
+  AttributeSchema,
+  SchemaFromDatabaseOptions,
+  IntrospectSchemaOptions,
+} from './schema-introspection.js';
+
+// Native Schema Introspection (from Rust core via WASM)
+export type {
+  SchemaSummary,
+  EntityTypeSchema,
+  RelationTypeSchema,
+  AttributeTypeSchema,
+  RoleTypeSchema,
+  OwnsSchema,
+  PlaysSchema,
+  RelatesSchema,
+  ValueType,
+} from './schema-types.js';
