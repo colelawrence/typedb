@@ -22,6 +22,21 @@ version = "0.0.0"
 default = ["memory"]
 memory = ["typedb-embedded/memory"]
 
+# Test output features
+discovery-output = []      # Write discovery JSONL to target/test-discovery.jsonl
+
+# Test category features (for selective running)
+test-constraints = []
+test-functions = []
+test-fetch = []
+test-explanation = []
+test-all-skipped = [
+    "test-constraints",
+    "test-functions",
+    "test-fetch",
+    "test-explanation"
+]
+
 [dependencies]
 typedb-embedded = { path = "../embedded", default-features = false }
 
@@ -59,3 +74,23 @@ name = "test_query_type_validation"
 [[test]]
 path = "tests/column_ordering.rs"
 name = "test_column_ordering"
+
+[[test]]
+path = "tests/reduce_aggregation.rs"
+name = "test_reduce_aggregation"
+
+# ============================================================================
+# Skipped Test Discovery (corresponding to TypeQL validation suite skips)
+# ============================================================================
+
+[[test]]
+path = "tests/constraint_validation.rs"
+name = "test_constraint_validation"
+
+[[test]]
+path = "tests/schema_modification.rs"
+name = "test_schema_modification"
+
+[[test]]
+path = "tests/functions.rs"
+name = "test_functions"

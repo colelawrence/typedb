@@ -13,7 +13,7 @@
     "declarationMap": false,
     "sourceMap": false,
     "outDir": "./dist",
-    "rootDir": "./src",
+    "rootDir": ".",
     "resolveJsonModule": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
@@ -23,5 +23,6 @@
     "noFallthroughCasesInSwitch": true
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "wasm", "src/**/*.test.ts"]
+  "exclude": ["node_modules", "dist", "wasm", "src/**/*.test.ts"],
+  "references": [{ "path": "./tsconfig.test.json" }]
 }

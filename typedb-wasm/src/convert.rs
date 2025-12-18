@@ -49,7 +49,7 @@ pub fn convert_value(value: &EmbeddedValue) -> WasmValue {
         EmbeddedValue::Type { category, label } => {
             WasmValue::Type { category: category.clone(), label: label.clone() }
         }
-        EmbeddedValue::Computed(attr) => WasmValue::Value(convert_attribute_value(attr)),
+        EmbeddedValue::Computed(attr) => WasmValue::Value { value: convert_attribute_value(attr) },
         EmbeddedValue::ThingList(items) => WasmValue::ThingList { items: items.iter().map(convert_value).collect() },
         EmbeddedValue::ValueList(items) => {
             WasmValue::ValueList { items: items.iter().map(convert_attribute_value).collect() }

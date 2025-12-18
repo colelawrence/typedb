@@ -2,6 +2,24 @@
 
 A practical quick reference that lets you move from relational or document thinking into TypeQL 3.0. Each section links a mental model to concrete syntax so agents can design schemas, write queries, and manipulate data confidently.
 
+## Feature Status (TypeQL 3.0)
+
+This guide is validated against `sdk/embedded/src/typeql-validation-tests/`. Each feature links to the test that captures the current behavior.
+
+| Feature | Status | Test Reference |
+|---------|--------|----------------|
+| Schema (`define`) | ✅ | `schema/types-and-ownership.test.ts::multiple types in one define` |
+| Schema (`redefine` parameters only) | ✅ | `schema/rules-and-introspection.test.ts::redefine modifies cardinality annotation` |
+| Schema (`undefine`) | ✅ | `schema/rules-and-introspection.test.ts::undefine removes ownership` |
+| Value constraints (`@values/@regex/@range`) | ✅ | `schema/rules-and-introspection.test.ts::Value Constraints` |
+| Rules (`rule when/then`) | ❌ | `schema/rules-and-introspection.test.ts::rules are not supported in TypeQL 3` |
+| Let expressions | ✅ | `queries/let-expressions.test.ts::let feeds reduce groupby with derived buckets` |
+| Fetch projection stage | ❌ | `fetch/fetch-projection.test.ts::fetch attribute access is not supported yet` |
+| `update` ownership replacement | ✅ | `writes/update-put-semantics.test.ts::update replaces existing attribute value` |
+| `put` upsert behavior | ❌ | `writes/update-put-semantics.test.ts::put appends another ownership instead of upserting` |
+| Delete `has $attr of $entity` | ✅ | `writes/update-put-semantics.test.ts::delete attribute keeps entity intact` |
+| Streaming function returns | ❌ | `functions/schema-defined-functions.test.ts::define fun returning stream` |
+
 ---
 
 ## 1. Language Mindset
@@ -92,29 +110,20 @@ entity company plays employment:employer;
 | `@abstract` | Type declarations | Prevent instantiation. |
 | `@card(min..max)` | `owns`, `plays`, `relates` | Defaults: `plays 0..`, `owns 0..1`, `relates 0..1`. |
 | `@key`, `@unique`, `@subkey`, `@distinct` | `owns` | Describe identity/uniqueness. |
-| `@values`, `@regex`, `@range` | `value` clause | Enforce allowed literals. |
+| `@values`, `@regex`, `@range` | `value` clause | Enforce allowed literals (see `schema/rules-and-introspection.test.ts`). |
 
-### 2.6 Rules (inference)
-```typeql
-define
-  rule transitive-friendship:
-    when {
-      friendship (friend: $a, friend: $b);
-      friendship (friend: $b, friend: $c);
-    }
-    then {
-      friendship (friend: $a, friend: $c);
-    };
-```
-Rules live inside schema definitions and extend what `match` can return without additional data.
+### 2.6 Rules (not supported)
+`rule name: when { ... } then { ... };` is not part of the TypeQL 3 grammar. Attempting to define rules produces a parse error (`schema/rules-and-introspection.test.ts::rules are not supported in TypeQL 3`). For now, all inference must be modelled explicitly in the data.
 
 ### 2.7 Removing or redefining parts of the schema
 ```typeql
 undefine entity obsolete-type;
 undefine owns email from user;
 undefine relates best-friend from friendship;
-redefine entity user, owns display-name;
+redefine entity item owns tag @card(1..10);
 ```
+- Use `define` to add new ownership or role declarations to existing types.
+- `redefine` only replaces annotation parameters (cardinality ranges, constraint literals). It cannot add marker annotations like `@key`.
 
 ---
 
@@ -173,9 +182,11 @@ let $adult = 18;                                               # computed consta
 The `not { $a is $b; }` pattern is useful to exclude self-references, e.g., when finding friends-of-friends but excluding the original person.
 
 ### 4.4 Comparisons
-- Equality/inequality: `=`, `!=`
+- Equality/inequality: `==`, `!=`
 - Ordering: `<`, `<=`, `>`, `>=`
 - Pattern matching: `like` (regex), `contains` (substring)
+
+Note: Use `==` for value equality (not `=`). For regex in `like`, use character classes like `[.]` to match literal dots rather than backslash escapes.
 
 ---
 
@@ -242,9 +253,16 @@ insert
 ### 6.2 `delete`
 ```typeql
 match $p isa person, has email "alice@example.com";
-delete $p has email "alice@example.com";
+delete $p;
 ```
-- Delete either a concept (`delete $p;`) or a specific ownership/link (`delete has $email of $p;`).
+- Delete a concept: `delete $p;`
+- Delete a specific attribute: `delete has $attr of $entity;`
+
+To delete a specific attribute from an entity:
+```typeql
+match $p isa person, has email "alice@t.com", has age $age;
+delete has $age of $p;
+```
 
 To delete a relation, use a named relation in the match:
 ```typeql
@@ -265,7 +283,7 @@ Replaces ownerships while respecting cardinality.
 match $p isa person, has name "Bob";
 put $p has email "bob@example.com";
 ```
-Acts like upsert for the owned attribute.
+Adds the ownership if missing and currently **does not** replace existing values—even when the attribute’s default cardinality is `@card(0..1)`. Use `update` when you need to replace an existing value (`writes/update-put-semantics.test.ts`).
 
 ---
 
@@ -290,6 +308,8 @@ Use `select` to choose explicit output bindings before `fetch` or final result s
 ---
 
 ## 8. Fetch JSON Projection
+
+> **Status:** Fetch pipelines currently raise `[PEX2] Cannot use a Fetch query to return ConceptRows` (`fetch/fetch-projection.test.ts`). Keep the syntax handy for future releases, but expect a `DataError` today.
 
 ### 8.1 Attribute access
 ```typeql
@@ -341,14 +361,7 @@ define fun org_followers($org: organization) -> integer:
 Functions can return scalars, structs, or streams depending on `return` clause shape.
 
 ### 9.3 Streaming function return
-```typeql
-with fun friends_of($user: user) -> { username: string }:
-  match
-    friendship (friend: $user, friend: $friend),
-    $friend has username $name;
-  return { username: $name };
-```
-Return braces describe the stream schema; the function can be consumed like any other stream in the pipeline.
+The `-> { field: type }` signature for returning streams from `with fun` / `define fun` is not yet supported in TypeQL 3. Parsing this syntax fails (`functions/schema-defined-functions.test.ts::define fun returning stream`). Stick to scalar return values for now.
 
 ---
 

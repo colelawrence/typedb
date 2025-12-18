@@ -50,7 +50,9 @@ pub enum WasmValue {
         category: String,
         label: String,
     },
-    Value(WasmAttributeValue),
+    Value {
+        value: WasmAttributeValue,
+    },
     ThingList {
         items: Vec<WasmValue>,
     },

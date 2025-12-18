@@ -21,71 +21,13 @@ import { freshDb, withSchema, schemas, SchemaError } from '../harness.ts';
 
 describe('TypeQL Schema: Rule Definitions', () => {
   /**
-   * Section 2.6: Basic rule definition with when/then
-   * Rules may have limited support in embedded - testing definition loading
+   * Rules are NOT part of TypeQL 3.
+   * The `rule` keyword does not exist in the TypeQL 3 grammar.
+   * These tests are kept as documentation of the non-existent feature.
    */
-  test.skip('define simple inference rule', async () => {
-    const db = await freshDb('rule_simple');
-
-    await db.define(`
-      define
-      attribute name, value string;
-      attribute email, value string;
-
-      entity person,
-        owns name,
-        owns email @key;
-
-      relation friendship,
-        relates friend @card(2);
-
-      person plays friendship:friend;
-
-      rule transitive-friendship:
-        when {
-          (friend: $a, friend: $b) isa friendship;
-          (friend: $b, friend: $c) isa friendship;
-        }
-        then {
-          (friend: $a, friend: $c) isa friendship;
-        };
-    `);
-
-    // Rule should be defined - we can verify the schema loaded
-    const result = await db.query('match $p isa person;');
-    expect(result.rowCount).toBe(0); // No data yet, but schema loaded
-  });
-
-  /**
-   * Rule with attribute conditions
-   */
-  test.skip('define rule with attribute conditions', async () => {
-    const db = await freshDb('rule_attr');
-
-    await db.define(`
-      define
-      attribute name, value string;
-      attribute status, value string;
-      attribute level, value integer;
-
-      entity account,
-        owns name,
-        owns status,
-        owns level;
-
-      rule premium-status:
-        when {
-          $a isa account, has level $l;
-          $l >= 10;
-        }
-        then {
-          $a has status "premium";
-        };
-    `);
-
-    // Verify schema loaded
-    const result = await db.query('match $a isa account;');
-    expect(result.rowCount).toBe(0);
+  test.skip('rules are not supported in TypeQL 3', async () => {
+    // Rules (rule name: when {} then {};) are not part of TypeQL 3.
+    // This test is skipped as documentation - do not unskip.
   });
 });
 
@@ -246,10 +188,13 @@ describe('TypeQL Schema: Type Hierarchy', () => {
 
 describe('TypeQL Schema: Schema Modification', () => {
   /**
-   * Section 2.7: Add new attribute to existing type using redefine
+   * Add new attribute ownership to existing type using `define` (not redefine).
+   *
+   * Note: `redefine` is for modifying EXISTING capabilities (e.g., changing @card parameters).
+   * To ADD new ownership, use `define`.
    */
-  test.skip('redefine to add ownership', async () => {
-    const db = await freshDb('redefine_add');
+  test('define adds new ownership to existing type', async () => {
+    const db = await freshDb('define_add_ownership');
 
     await db.define(`
       define
@@ -257,11 +202,11 @@ describe('TypeQL Schema: Schema Modification', () => {
       entity person, owns name;
     `);
 
-    // Add new attribute
+    // Add new attribute ownership using define (NOT redefine)
     await db.define(`
       define
       attribute age, value integer;
-      redefine entity person, owns age;
+      entity person, owns age;
     `);
 
     // Insert with new attribute
@@ -273,9 +218,10 @@ describe('TypeQL Schema: Schema Modification', () => {
   });
 
   /**
-   * Section 2.7: Remove attribute ownership using undefine
+   * Remove attribute ownership using undefine.
+   * Syntax: `undefine owns <attribute> from <type>;`
    */
-  test.skip('undefine to remove ownership', async () => {
+  test('undefine removes ownership', async () => {
     const db = await freshDb('undefine_remove');
 
     await db.define(`
@@ -285,11 +231,135 @@ describe('TypeQL Schema: Schema Modification', () => {
       entity person, owns name, owns nickname;
     `);
 
-    // Remove nickname ownership
+    // Remove nickname ownership (no data exists yet)
     await db.define('undefine owns nickname from person;');
 
-    // Now person shouldn't be able to own nickname
-    // This should fail or nickname shouldn't be queryable
+    // Now person should NOT be able to own nickname - insert should fail
+    await expect(
+      db.execute('insert $p isa person, has name "Bob", has nickname "Bobby";')
+    ).rejects.toThrow();
+  });
+
+  /**
+   * Undefine fails when instances exist that use the ownership.
+   * This is a safety feature to prevent data loss.
+   */
+  test('undefine fails with existing instances', async () => {
+    const db = await freshDb('undefine_instances');
+
+    await db.define(`
+      define
+      attribute name, value string;
+      attribute nickname, value string;
+      entity person, owns name, owns nickname;
+    `);
+
+    // Insert data that uses the ownership
+    await db.execute('insert $p isa person, has name "Alice", has nickname "Ali";');
+
+    // Try to remove ownership - should fail due to existing instances
+    await expect(
+      db.define('undefine owns nickname from person;')
+    ).rejects.toThrow(/existing|instances/i);
+  });
+
+  /**
+   * Redefine modifies existing capability parameters (e.g., @card range).
+   *
+   * Note: `redefine` can only replace schema elements that have parameters.
+   * Marker annotations like @key, @unique cannot be redefined (they have no parameters).
+   */
+  test('redefine modifies cardinality annotation', async () => {
+    const db = await freshDb('redefine_card');
+
+    await db.define(`
+      define
+      attribute name, value string;
+      attribute tag, value string;
+      entity item, owns name, owns tag @card(1..3);
+    `);
+
+    // Insert item with 2 tags (within original range)
+    await db.execute('insert $i isa item, has name "Widget", has tag "red", has tag "sale";');
+
+    // Redefine to allow more tags
+    await db.define('redefine entity item owns tag @card(1..10);');
+
+    // Now we should be able to add more tags
+    await db.execute(`
+      match $i isa item, has name "Widget";
+      insert $i has tag "new", has tag "featured", has tag "trending";
+    `);
+
+    const result = await db.query('match $i isa item, has tag $t;');
+    expect(result.rowCount).toBe(5); // 2 original + 3 new
+  });
+
+  /**
+   * Redefine cannot add marker annotations like @key (they have no parameters to replace).
+   */
+  test('redefine cannot add @key annotation', async () => {
+    const db = await freshDb('redefine_key_fail');
+
+    await db.define(`
+      define
+      attribute name, value string;
+      entity person, owns name;
+    `);
+
+    // Try to add @key via redefine - should fail
+    // @key has no parameters, so there's nothing to "replace"
+    await expect(
+      db.define('redefine entity person owns name @key;')
+    ).rejects.toThrow();
+  });
+});
+
+describe('TypeQL Schema: Value Constraints', () => {
+  /**
+   * Section 2.5: @values enumerates allowed literals.
+   */
+  test('@values restricts inserts to enumerated literals', async () => {
+    const db = await freshDb('value_constraints_values');
+    await db.define(`
+      define
+      attribute status, value string @values("active", "inactive");
+      entity task, owns status;
+    `);
+
+    await db.execute('insert $t isa task, has status "active";');
+
+    await expect(db.execute('insert $t isa task, has status "pending";')).rejects.toThrow();
+  });
+
+  /**
+   * Section 2.5: @regex enforces string pattern.
+   */
+  test('@regex enforces string pattern', async () => {
+    const db = await freshDb('value_constraints_regex');
+    await db.define(`
+      define
+      attribute email, value string @regex(".*@.*");
+      entity person, owns email;
+    `);
+
+    await db.execute('insert $p isa person, has email "valid@t.com";');
+    await expect(db.execute('insert $p isa person, has email "invalid";')).rejects.toThrow();
+  });
+
+  /**
+   * Section 2.5: @range enforces numeric bounds.
+   */
+  test('@range enforces numeric bounds', async () => {
+    const db = await freshDb('value_constraints_range');
+    await db.define(`
+      define
+      attribute percentile, value integer @range(0..100);
+      entity score, owns percentile;
+    `);
+
+    await db.execute('insert $s isa score, has percentile 50;');
+    await expect(db.execute('insert $s isa score, has percentile 150;')).rejects.toThrow();
   });
 });
 
