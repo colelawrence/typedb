@@ -2,6 +2,8 @@
 
 A comprehensive test suite validating TypeQL 3.0 constructs against the embedded TypeDB SDK. Each test is tied to the authoritative documentation to ensure SDK behavior matches specification.
 
+**Current Status**: 168 passing tests, 40 skipped (for features not yet implemented in embedded version).
+
 ## Running Tests
 
 ```bash
