@@ -17,6 +17,7 @@
 
 import { Database } from './database.js';
 import { ParseError, SchemaError, DataError, TypeDBError } from './error.js';
+import { splitTypeQLStatements } from '../../../typedb-web-studio/src/curriculum/typeql-statement-splitter.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -251,15 +252,12 @@ async function loadContext(
   const seedPath = path.join(contextPath, 'seed.tql');
   if (fs.existsSync(seedPath)) {
     const seed = fs.readFileSync(seedPath, 'utf-8');
-    // Split by "insert" statements and execute each
-    const statements = seed.split(/(?=^insert\s)/m).filter((s) => s.trim());
+    const statements = splitTypeQLStatements(seed);
     for (const stmt of statements) {
-      if (stmt.trim().startsWith('#')) continue;
       try {
-        await db.execute(stmt.trim());
+        await db.execute(stmt);
       } catch (e) {
         result.errors.push(`Failed to load seed data: ${e instanceof Error ? e.message : String(e)}`);
-        // Continue with other statements
       }
     }
   }

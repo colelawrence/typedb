@@ -7,8 +7,9 @@ A hub for every TypeQL 3.0 reference: specs, curriculum, tests, and exemplar cod
 ## Quick Start
 
 - **Need syntax immediately?** Jump to the **[TypeQL 3.0 Syntax Guide](./TYPEQL_3_SYNTAX_GUIDE.md)**.
+- **Need conceptual understanding?** Read the **[TypeQL Mental Model](./TYPEQL_MENTAL_MODEL.md)** for WHY TypeQL works the way it does.
+- **Need runnable examples?** Use the **[validated scenarios](./scenarios/)** - 12 scenario files covering all major TypeQL features.
 - **Need to verify semantics?** Consult the blueprint specs in [`docs/blueprints/`](../docs/blueprints/) and the grammar in [`typeql/rust/parser/typeql.pest`](../typeql/rust/parser/typeql.pest).
-- **Need runnable proof?** Use the typed curriculum in [`typedb-web-studio/docs/curriculum/`](../typedb-web-studio/docs/curriculum/) and the behavior tests in [`tests/behaviour/`](../tests/behaviour/).
 
 ---
 
@@ -39,6 +40,8 @@ A hub for every TypeQL 3.0 reference: specs, curriculum, tests, and exemplar cod
 | Parser + compiler tests | [`typeql/rust/parser/test/`](../typeql/rust/parser/test/), [`compiler/tests/`](../compiler/tests/) | Ensure grammar + compiler semantics |
 | Test orchestration | [`TESTING.md`](../TESTING.md) | Commands and strategies for running verification suites |
 | Agent-ready syntax reference | [`typeql-skill/TYPEQL_3_SYNTAX_GUIDE.md`](./TYPEQL_3_SYNTAX_GUIDE.md) | Quick reference for query authors |
+| Conceptual foundation | [`typeql-skill/TYPEQL_MENTAL_MODEL.md`](./TYPEQL_MENTAL_MODEL.md) | WHY TypeQL works the way it does (PERA, roles, patterns) |
+| Validated scenarios | [`typeql-skill/scenarios/`](./scenarios/) | 12 runnable scenario files covering all major TypeQL features |
 
 ---
 
@@ -226,27 +229,41 @@ Use this index to trace each topic to specs, executable material, and tests.
 
 ### Coverage Heatmap
 
-| Topic | Spec Coverage | Curriculum Coverage | Automated Tests | Notes |
-|-------|---------------|---------------------|-----------------|-------|
-| Cardinality annotations (`@card`, defaults) | ✅ `schema.md` | ❌ None | ✅ Concept + behavior tests | Need guided exercises explaining default vs explicit cardinality. |
-| Keys & uniqueness (`@key`, `@unique`, `@subkey`, `@distinct`) | ✅ `schema.md` | ❌ None | ✅ Concept/type tests | No curriculum or examples showing uniqueness errors. |
-| Value constraints (`@values`, `@regex`, `@range`) | ✅ `schema.md` | ❌ None | ✅ TypeQL validation tests (`schema/rules-and-introspection.test.ts`) | Still need curriculum walkthroughs showing constraint failures and recoveries. |
-| List/value types (`[]`, `struct`, decimal suffixes) | ✅ `type_system.md`, `schema.md` | ⚠️ Mentioned in syntax guide | ⚠️ Limited tests | Need practical exercises and tests beyond parser assertions. |
-| Write pipeline stages (`insert`/`delete`/`update`/`put`) | ✅ `write.md` | ❌ None | ✅ Behavior tests + TypeQL validation tests (`writes/update-put-semantics.test.ts`) | Curriculum lacks walkthroughs and needs to explain current `put` semantics vs documented upsert. |
-| Functions (definition + invocation) | ✅ `functions.md` | ⚠️ Mentioned in Query Ladder L13–L14 | ✅ Behavior tests | Need interactive examples showing `with fun`, schema-level functions, recursion. |
-| Schema introspection queries (`$type sub relation;`) | ✅ `read.md` (schema statements) | ❌ None | ⚠️ Parser + concept tests | Add Koans/exercises exploring schema introspection and `label`. |
-| Pipeline composition + multi-stage queries | ✅ `read.md` | ⚠️ Exercises show limited sequences | ✅ Behavior `pipelines.rs` | Extend lessons to cover `match → reduce → fetch`, `match → update`. |
-| Fetch JSON projection (`fetch { ... }`) | ✅ `read.md` | ❌ None | ❌ TypeQL validation tests (`fetch/fetch-projection.test.ts`) currently hit `[PEX2]` | Feature not wired in engine; keep docs but mark as unsupported until tests pass. |
+| Topic | Spec Coverage | Scenario Coverage | Curriculum Coverage | Automated Tests | Notes |
+|-------|---------------|-------------------|---------------------|-----------------|-------|
+| Cardinality annotations (`@card`, defaults) | ✅ `schema.md` | ✅ `08-constraints.md` | ❌ None | ✅ Concept + behavior tests | Scenario covers cardinality with runnable examples. |
+| Keys & uniqueness (`@key`, `@unique`) | ✅ `schema.md` | ✅ `08-constraints.md` | ❌ None | ✅ Concept/type tests | Scenario shows uniqueness enforcement and errors. |
+| Value constraints (`@values`, `@regex`, `@range`) | ✅ `schema.md` | ✅ `08-constraints.md` | ❌ None | ✅ TypeQL validation tests | Scenario demonstrates constraint violations. |
+| List/value types (`[]`, `struct`, decimal suffixes) | ✅ `type_system.md`, `schema.md` | ⚠️ Mentioned in syntax guide | ⚠️ Mentioned in syntax guide | ⚠️ Limited tests | Need practical exercises beyond parser assertions. |
+| Write pipeline stages (`insert`/`delete`/`update`/`put`) | ✅ `write.md` | ✅ `06-write-operations.md` | ❌ None | ✅ Behavior tests + validation | Scenario documents `put` append behavior (gotcha!). |
+| Functions (`let`, expressions) | ✅ `functions.md` | ✅ `12-functions.md` | ⚠️ Query Ladder L13–L14 | ✅ Behavior tests | Scenario covers working features; marks unimplemented. |
+| Schema introspection queries | ✅ `read.md` | ✅ `10-schema-introspection.md` | ❌ None | ⚠️ Parser + concept tests | Scenario covers querying types, define/undefine/redefine. |
+| Subtyping & inheritance (`sub`, `isa`, `isa!`) | ✅ `type_system.md` | ✅ `09-subtyping.md` | ⚠️ Query Ladder L12 | ✅ Concept tests | Scenario covers abstract types and exact matching. |
+| Error patterns & debugging | ⚠️ Scattered | ✅ `07-error-patterns.md` | ❌ None | ✅ Validation tests | Scenario shows error → cause → fix for parse/schema/data errors. |
+| Common footguns (cross-products, etc.) | ⚠️ `read.md` mentions | ✅ `11-footguns.md` | ❌ None | ✅ Validation tests | Scenario demonstrates and explains dangerous patterns. |
+| Pipeline composition + multi-stage queries | ✅ `read.md` | ⚠️ Partial in `06-write-operations.md` | ⚠️ Limited sequences | ✅ Behavior `pipelines.rs` | Could expand `match → reduce → fetch` examples. |
+| Fetch JSON projection (`fetch { ... }`) | ✅ `read.md` | ❌ None | ❌ None | ❌ Hits `[PEX2]` | Feature not wired in engine; marked unsupported. |
 
 Legend: ✅ = covered, ⚠️ = partial, ❌ = missing.
 
 ### Recommended Next Work Items
 
-1. **Write Operations Module** – Add `08-writes/` to curriculum with runnable insert/update/delete exercises referencing `write.md`.
-2. **Constraint Playground** – Create Koans forcing learners to satisfy `@card`, `@key`, and `@unique` invariants, linking to behavior failures.
-3. **Function Track** – Author interactive examples for Query Ladder L13–L14; include recursion and streaming returns validated against `tests/behaviour/query/functions/`.
-4. **Schema Introspection Series** – New exercises demonstrating `entity $type`, `label`, `owns`, `plays` queries to reinforce PERA reasoning.
-5. **Value Constraint Cheatsheet** – Expand syntax guide + curriculum to cover `@values`, regex usage, decimals/lists, then add targeted Koans.
+**Completed via Scenarios** (see `typeql-skill/scenarios/`):
+- ✅ Write Operations → `06-write-operations.md`
+- ✅ Constraint Playground → `08-constraints.md`
+- ✅ Schema Introspection → `10-schema-introspection.md`
+- ✅ Function Examples → `12-functions.md` (working features)
+- ✅ Value Constraints → `08-constraints.md`
+- ✅ Error Patterns → `07-error-patterns.md`
+- ✅ Common Footguns → `11-footguns.md`
+- ✅ Subtyping & Inheritance → `09-subtyping.md`
+
+**Remaining Gaps:**
+1. **List/Struct Types** – Add practical exercises for `[]` list types and `struct` definitions (currently only mentioned in syntax guide).
+2. **Fetch JSON Projection** – Document when `fetch { ... }` becomes supported (currently blocked by `[PEX2]` engine error).
+3. **Advanced Functions** – Add scenarios for `with fun` query-scoped functions and `define fun` schema functions when implemented.
+4. **Recursive Functions** – Document streaming returns and recursion patterns when behavior tests pass.
+5. **Interactive Curriculum** – Migrate scenario content to `typedb-web-studio/docs/curriculum/` for interactive web-based learning.
 
 ---
 
@@ -257,11 +274,32 @@ Legend: ✅ = covered, ⚠️ = partial, ❌ = missing.
 | Blueprint specs | 9 | ~1.9k LOC |
 | Teaching approaches | 6 | ~1.9k LOC |
 | Curriculum lessons | 30 | ~2.3k LOC (runnable) |
+| **typeql-skill scenarios** | **12** | **Validated via `curriculum-scenarios.test.ts`** |
 | Behavior test modules | 90+ | Rust + Bazel |
 | Curriculum test files | 5 | Run via Bun/Vitest |
+| TypeQL validation tests | 19 | 168 tests (128 pass, 40 skip for unimplemented features) |
+
+---
+
+## Scenario File Index
+
+| File | Topics Covered |
+|------|----------------|
+| `01-schema-basics.md` | Entity/relation/attribute types, ownership, roles |
+| `02-insert-and-query.md` | Basic insert and match patterns |
+| `03-relations.md` | Relation creation, role players, traversal |
+| `04-logic-operators.md` | `or`, `not`, `try`, `is` patterns |
+| `05-aggregations.md` | `reduce`, `count`, `sum`, `groupby` |
+| `06-write-operations.md` | `delete`, `update`, `put` (with gotcha!) |
+| `07-error-patterns.md` | Parse/schema/data errors with fixes |
+| `08-constraints.md` | `@key`, `@unique`, `@card`, `@values`, `@regex`, `@range` |
+| `09-subtyping.md` | `sub`, `isa` vs `isa!`, `@abstract`, inheritance |
+| `10-schema-introspection.md` | Querying types, `define`/`undefine`/`redefine` |
+| `11-footguns.md` | Cross-products, self-reference, relation cleanup |
+| `12-functions.md` | `let` expressions, arithmetic, comparisons |
 
 ---
 
 ## Version Information
 
-Repository state: current working tree on 2025-12-17. Update this document whenever new docs, tests, or curriculum land so agents can trust the index.
+Repository state: current working tree on 2025-12-18. Update this document whenever new docs, tests, or curriculum land so agents can trust the index.

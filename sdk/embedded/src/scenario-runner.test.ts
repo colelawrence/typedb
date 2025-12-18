@@ -12,7 +12,13 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { parseScenario, runScenario } from './scenario-runner.js';
+import {
+  parseScenario,
+  runScenario,
+  resolveImports,
+  parseScenarioWithImports,
+  SETUP_STAGE_TYPES,
+} from './scenario-runner.js';
 
 describe('Scenario Parser', () => {
   test('parses front matter', () => {
@@ -458,5 +464,340 @@ rows: 1
 
     const result = await runScenario(scenario);
     expect(result.success).toBe(true);
+  });
+});
+
+// ============================================================================
+// Import Resolution Tests
+// ============================================================================
+
+describe('Scenario Parser - Import Blocks', () => {
+  test('parses import block', () => {
+    const content = `
+\`\`\`import
+./fixtures/schema.md
+./fixtures/data.md
+\`\`\`
+
+\`\`\`typeql:query
+match $p isa person;
+\`\`\`
+`;
+    const scenario = parseScenario(content);
+    expect(scenario.stages.length).toBe(2);
+    expect(scenario.stages[0].kind.type).toBe('import');
+    if (scenario.stages[0].kind.type === 'import') {
+      expect(scenario.stages[0].kind.paths).toEqual([
+        './fixtures/schema.md',
+        './fixtures/data.md',
+      ]);
+    }
+  });
+
+  test('parses import block with comments', () => {
+    const content = `
+\`\`\`import
+# Base schema
+./base.md
+
+# Test data
+./data.md
+\`\`\`
+`;
+    const scenario = parseScenario(content);
+    expect(scenario.stages.length).toBe(1);
+    if (scenario.stages[0].kind.type === 'import') {
+      expect(scenario.stages[0].kind.paths).toEqual(['./base.md', './data.md']);
+    }
+  });
+});
+
+describe('Import Resolution', () => {
+  test('resolves simple import', async () => {
+    const baseSchema = `
+\`\`\`typeql:schema
+define attribute name, value string;
+\`\`\`
+`;
+    const mainScenario = `
+\`\`\`import
+./base.md
+\`\`\`
+
+\`\`\`typeql:query
+match $x isa thing;
+\`\`\`
+`;
+
+    const files: Record<string, string> = {
+      '/test/base.md': baseSchema,
+    };
+
+    const scenario = parseScenario(mainScenario, '/test/main.md');
+    const resolved = await resolveImports(scenario, {
+      loadFile: async (path) => {
+        if (files[path]) return files[path];
+        throw new Error(`File not found: ${path}`);
+      },
+    });
+
+    // Should have schema stage from import + query stage from main
+    expect(resolved.stages.length).toBe(2);
+    expect(resolved.stages[0].kind.type).toBe('schema');
+    expect(resolved.stages[1].kind.type).toBe('query');
+  });
+
+  test('resolves nested imports (depth-first)', async () => {
+    const base = `
+\`\`\`typeql:schema
+define attribute id, value string;
+\`\`\`
+`;
+    const middle = `
+\`\`\`import
+./base.md
+\`\`\`
+
+\`\`\`typeql:schema
+define entity person, owns id;
+\`\`\`
+
+\`\`\`typeql:data
+insert $p isa person, has id "1";
+\`\`\`
+`;
+    const main = `
+\`\`\`import
+./middle.md
+\`\`\`
+
+\`\`\`typeql:query
+match $p isa person;
+\`\`\`
+`;
+
+    const files: Record<string, string> = {
+      '/test/base.md': base,
+      '/test/middle.md': middle,
+    };
+
+    const scenario = parseScenario(main, '/test/main.md');
+    const resolved = await resolveImports(scenario, {
+      loadFile: async (path) => {
+        if (files[path]) return files[path];
+        throw new Error(`File not found: ${path}`);
+      },
+    });
+
+    // Order should be: base schema → middle schema → middle data → main query
+    expect(resolved.stages.length).toBe(4);
+    expect(resolved.stages[0].kind.type).toBe('schema'); // base
+    expect(resolved.stages[1].kind.type).toBe('schema'); // middle
+    expect(resolved.stages[2].kind.type).toBe('data'); // middle
+    expect(resolved.stages[3].kind.type).toBe('query'); // main
+  });
+
+  test('filters out non-setup stages from imports', async () => {
+    const fixture = `
+\`\`\`typeql:schema
+define entity person;
+\`\`\`
+
+\`\`\`typeql:data
+insert $p isa person;
+\`\`\`
+
+\`\`\`typeql:query
+match $p isa person;
+\`\`\`
+
+\`\`\`typeql:expect
+rows: 1
+\`\`\`
+`;
+    const main = `
+\`\`\`import
+./fixture.md
+\`\`\`
+
+\`\`\`typeql:query
+match $p isa person;
+\`\`\`
+`;
+
+    const files: Record<string, string> = {
+      '/test/fixture.md': fixture,
+    };
+
+    const scenario = parseScenario(main, '/test/main.md');
+    const resolved = await resolveImports(scenario, {
+      loadFile: async (path) => {
+        if (files[path]) return files[path];
+        throw new Error(`File not found: ${path}`);
+      },
+    });
+
+    // Should only import schema + data, not query/expect
+    expect(resolved.stages.length).toBe(3);
+    expect(resolved.stages[0].kind.type).toBe('schema');
+    expect(resolved.stages[1].kind.type).toBe('data');
+    expect(resolved.stages[2].kind.type).toBe('query'); // from main
+  });
+
+  test('detects circular imports', async () => {
+    const a = `
+\`\`\`import
+./b.md
+\`\`\`
+
+\`\`\`typeql:schema
+define entity a;
+\`\`\`
+`;
+    const b = `
+\`\`\`import
+./a.md
+\`\`\`
+
+\`\`\`typeql:schema
+define entity b;
+\`\`\`
+`;
+
+    const files: Record<string, string> = {
+      '/test/a.md': a,
+      '/test/b.md': b,
+    };
+
+    const scenario = parseScenario(a, '/test/a.md');
+    await expect(
+      resolveImports(scenario, {
+        loadFile: async (path) => {
+          if (files[path]) return files[path];
+          throw new Error(`File not found: ${path}`);
+        },
+      })
+    ).rejects.toThrow(/[Cc]ircular import/);
+  });
+
+  test('handles relative path resolution', async () => {
+    const base = `
+\`\`\`typeql:schema
+define attribute name, value string;
+\`\`\`
+`;
+    const nested = `
+\`\`\`import
+../base.md
+\`\`\`
+
+\`\`\`typeql:schema
+define entity person, owns name;
+\`\`\`
+`;
+    const main = `
+\`\`\`import
+./fixtures/nested.md
+\`\`\`
+
+\`\`\`typeql:query
+match $p isa person;
+\`\`\`
+`;
+
+    const files: Record<string, string> = {
+      '/test/base.md': base,
+      '/test/fixtures/nested.md': nested,
+    };
+
+    const scenario = parseScenario(main, '/test/main.md');
+    const resolved = await resolveImports(scenario, {
+      loadFile: async (path) => {
+        if (files[path]) return files[path];
+        throw new Error(`File not found: ${path}`);
+      },
+    });
+
+    // Should resolve: /test/fixtures/nested.md → /test/base.md
+    expect(resolved.stages.length).toBe(3);
+  });
+});
+
+describe('Scenario Runner - With Imports', () => {
+  test('runs scenario with resolved imports', async () => {
+    const baseSchema = `
+\`\`\`typeql:schema
+define
+attribute name, value string;
+entity person, owns name;
+\`\`\`
+`;
+    const baseData = `
+\`\`\`import
+./schema.md
+\`\`\`
+
+\`\`\`typeql:data
+insert $p isa person, has name "Alice";
+insert $p isa person, has name "Bob";
+\`\`\`
+`;
+    const main = `
+\`\`\`import
+./data.md
+\`\`\`
+
+\`\`\`typeql:query
+match $p isa person, has name $n;
+\`\`\`
+
+\`\`\`typeql:expect
+rows: 2
+columns: [p, n]
+\`\`\`
+`;
+
+    const files: Record<string, string> = {
+      '/test/schema.md': baseSchema,
+      '/test/data.md': baseData,
+    };
+
+    const scenario = await parseScenarioWithImports(
+      main,
+      {
+        loadFile: async (path) => {
+          if (files[path]) return files[path];
+          throw new Error(`File not found: ${path}`);
+        },
+      },
+      '/test/main.md'
+    );
+
+    const result = await runScenario(scenario);
+
+    // Debug output
+    for (const sr of result.stageResults) {
+      if (!sr.success) {
+        console.log(`Stage ${sr.index} (${sr.stageType}) failed:`, sr.error, sr.differences);
+      }
+    }
+
+    expect(result.success).toBe(true);
+  });
+
+  test('fails if imports not resolved', async () => {
+    const scenario = parseScenario(`
+\`\`\`import
+./some-file.md
+\`\`\`
+
+\`\`\`typeql:query
+match $x isa thing;
+\`\`\`
+`);
+
+    const result = await runScenario(scenario);
+    expect(result.success).toBe(false);
+    expect(result.stageResults[0].error).toContain('Import stage not resolved');
   });
 });

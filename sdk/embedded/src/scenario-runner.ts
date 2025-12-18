@@ -74,7 +74,14 @@ export type StageKind =
   | { type: 'data'; typeql: string }
   | { type: 'query'; typeql: string }
   | { type: 'expect'; expectation: Expectation }
+  | { type: 'import'; paths: string[] }
   | { type: 'raw'; typeql: string };
+
+/**
+ * Setup stage types that are imported from other files.
+ * Only these stages are extracted when a file is imported.
+ */
+export const SETUP_STAGE_TYPES = ['schema', 'data'] as const;
 
 /**
  * Expected results for a query.
@@ -251,8 +258,11 @@ function createStage(
     case 'typeql:raw':
       kind = { type: 'raw', typeql: content };
       break;
+    case 'import':
+      kind = { type: 'import', paths: parseImportPaths(content) };
+      break;
     default:
-      // Skip non-typeql blocks
+      // Skip non-typeql blocks (unless it's an import)
       if (!blockType.startsWith('typeql')) {
         return null;
       }
@@ -316,6 +326,162 @@ function parseArray(value: string): string[] {
   return match[1].split(',').map((s) => s.trim()).filter(Boolean);
 }
 
+/**
+ * Parse import paths from an import block.
+ * Supports one path per line, with # comments.
+ */
+function parseImportPaths(content: string): string[] {
+  return content
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'));
+}
+
+// ============================================================================
+// Import Resolution
+// ============================================================================
+
+/**
+ * A function that loads file content given a path.
+ * Used to abstract file system access for import resolution.
+ */
+export type FileLoader = (path: string) => Promise<string>;
+
+/**
+ * Options for resolving imports.
+ */
+export interface ResolveOptions {
+  /** Function to load file content by path */
+  loadFile: FileLoader;
+  /** Base path for resolving relative imports (directory of the importing file) */
+  basePath?: string;
+}
+
+/**
+ * Resolve a path relative to a base path.
+ */
+function resolvePath(importPath: string, basePath?: string): string {
+  if (!basePath || importPath.startsWith('/')) {
+    return importPath;
+  }
+  // Handle relative paths
+  if (importPath.startsWith('./') || importPath.startsWith('../')) {
+    const baseDir = basePath.replace(/\/[^/]*$/, ''); // Remove filename to get directory
+    const parts = baseDir.split('/').filter(Boolean);
+    const importParts = importPath.split('/').filter(Boolean);
+
+    for (const part of importParts) {
+      if (part === '.') continue;
+      if (part === '..') {
+        parts.pop();
+      } else {
+        parts.push(part);
+      }
+    }
+    return '/' + parts.join('/');
+  }
+  // Treat as relative to base directory
+  const baseDir = basePath.replace(/\/[^/]*$/, '');
+  return baseDir + '/' + importPath;
+}
+
+/**
+ * Extract only setup stages from a scenario.
+ * Used when importing a file as a fixture.
+ */
+function extractSetupStages(scenario: Scenario): Stage[] {
+  return scenario.stages.filter(
+    (stage) => SETUP_STAGE_TYPES.includes(stage.kind.type as any)
+  );
+}
+
+/**
+ * Resolve imports and flatten setup stages into a scenario.
+ *
+ * Import resolution is depth-first: if A imports B which imports C,
+ * the stages are ordered: C's setup → B's setup → A's setup → A's other stages.
+ *
+ * @param scenario - The scenario to resolve imports for
+ * @param options - File loader and base path options
+ * @param visited - Set of already-visited paths (for cycle detection)
+ * @returns The scenario with imports resolved (setup stages prepended)
+ */
+export async function resolveImports(
+  scenario: Scenario,
+  options: ResolveOptions,
+  visited: Set<string> = new Set()
+): Promise<Scenario> {
+  const currentPath = scenario.sourcePath ?? 'inline';
+
+  // Check for circular imports
+  if (visited.has(currentPath)) {
+    const cycle = [...visited, currentPath].join(' → ');
+    throw new Error(`Circular import detected: ${cycle}`);
+  }
+  visited.add(currentPath);
+
+  // Collect all import stages and their resolved setup stages
+  const importedSetupStages: Stage[] = [];
+  const localStages: Stage[] = [];
+
+  for (const stage of scenario.stages) {
+    if (stage.kind.type === 'import') {
+      // Process each import path
+      for (const importPath of stage.kind.paths) {
+        const resolvedPath = resolvePath(importPath, scenario.sourcePath ?? options.basePath);
+
+        try {
+          const content = await options.loadFile(resolvedPath);
+          const importedScenario = parseScenario(content, resolvedPath);
+
+          // Recursively resolve imports in the imported file
+          const resolved = await resolveImports(
+            importedScenario,
+            { ...options, basePath: resolvedPath },
+            new Set(visited)
+          );
+
+          // Extract only setup stages
+          const setupStages = extractSetupStages(resolved);
+          importedSetupStages.push(...setupStages);
+        } catch (e) {
+          if (e instanceof Error && e.message.includes('Circular import')) {
+            throw e;
+          }
+          throw new Error(
+            `Failed to import '${importPath}' (resolved to '${resolvedPath}'): ${e instanceof Error ? e.message : String(e)}`
+          );
+        }
+      }
+    } else {
+      localStages.push(stage);
+    }
+  }
+
+  // Return scenario with imported setup stages prepended
+  return {
+    ...scenario,
+    stages: [...importedSetupStages, ...localStages],
+  };
+}
+
+/**
+ * Parse a scenario from Markdown and resolve all imports.
+ * This is the main entry point for loading scenarios with import support.
+ *
+ * @param content - The Markdown content of the scenario file
+ * @param options - File loader and base path options
+ * @param sourcePath - Optional path of the source file (for relative import resolution)
+ */
+export async function parseScenarioWithImports(
+  content: string,
+  options: ResolveOptions,
+  sourcePath?: string
+): Promise<Scenario> {
+  const scenario = parseScenario(content, sourcePath);
+  return resolveImports(scenario, { ...options, basePath: sourcePath });
+}
+
 // ============================================================================
 // Runner
 // ============================================================================
@@ -353,7 +519,7 @@ export async function runScenario(
       stageResult.lineNumber = stage.lineNumber;
 
       // Update last results
-      if (stage.kind.type === 'query' || stage.kind.type === 'data') {
+      if (stage.kind.type === 'query' || stage.kind.type === 'data' || stage.kind.type === 'schema') {
         if (stageResult.success) {
           lastQueryResult = (stageResult as any)._queryResult ?? null;
           lastError = null;
@@ -363,13 +529,20 @@ export async function runScenario(
         }
       }
 
+      // Check if this is an expected failure: if the next stage is an expect with error expectations,
+      // and this stage failed, don't mark it as a failure - let the expect stage validate
+      const nextStage = scenario.stages[i + 1];
+      const isExpectedFailure = !stageResult.success &&
+        nextStage?.kind.type === 'expect' &&
+        (nextStage.kind.expectation.errorContains || nextStage.kind.expectation.errorType);
+
       // Clean internal state before storing
       delete (stageResult as any)._queryResult;
       delete (stageResult as any)._error;
 
       result.stageResults.push(stageResult);
 
-      if (!stageResult.success) {
+      if (!stageResult.success && !isExpectedFailure) {
         result.success = false;
         if (options?.failFast) break;
       }
@@ -407,6 +580,16 @@ async function runStage(
       return checkExpectation(kind.expectation, index, lastQueryResult, lastError);
     case 'raw':
       return runRaw(db, kind.typeql, index);
+    case 'import':
+      // Imports should be resolved before running - this is an error
+      return {
+        index,
+        stageType: 'import',
+        success: false,
+        durationMs: 0,
+        differences: [],
+        error: `Import stage not resolved. Use resolveImports() or parseScenarioWithImports() before running.`,
+      };
     default:
       return {
         index,
