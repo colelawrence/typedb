@@ -49,6 +49,7 @@
 //! - `typeql:query` - Query to execute and check expectations
 //! - `typeql:expect` - Expected results for the preceding query
 //! - `typeql:error` - Expected error for the preceding stage
+//! - `import` - Import setup stages from other scenario files
 //!
 //! ## Expectations
 //!
@@ -58,9 +59,25 @@
 //! - `values: [[...], [...]]` - Expected row values (order-sensitive)
 //! - `values_unordered: [[...], [...]]` - Expected values (order-insensitive)
 //! - `error_contains: "message"` - Expected error substring
+//!
+//! ## Imports
+//!
+//! Use `import` blocks to include setup stages from other files:
+//!
+//! ````markdown
+//! ```import
+//! ./fixtures/base-schema.md
+//! ./fixtures/test-data.md
+//! ```
+//! ````
+//!
+//! Only `schema` and `data` stages are imported from referenced files.
+//! See the [`import`] module for more details.
 
+pub mod import;
 mod models;
 mod parser;
 
+pub use import::{resolve_imports, parse_with_imports, FileLoader, FsFileLoader, MemoryFileLoader, SETUP_STAGE_TYPES};
 pub use models::*;
 pub use parser::*;

@@ -54,11 +54,39 @@ description: Brief description
 
 | Block Type | Purpose | Runs As |
 |------------|---------|---------|
+| `import` | Import setup stages from other files | Resolved before execution |
 | `typeql:schema` | Schema definition | `define` / `redefine` / `undefine` |
 | `typeql:data` | Data modification | `insert` / `delete` / `update` / `put` |
 | `typeql:query` | Read query | `match` + pipeline |
 | `typeql:expect` | Verify results | Assertion |
 | `typeql:error` | Expect failure | Error assertion |
+
+### Import Blocks
+
+Import blocks allow scenarios to pre-load schema and data from other files:
+
+````markdown
+```import
+./fixtures/base-schema.md
+./fixtures/test-data.md
+```
+````
+
+**Import behavior:**
+- Paths are relative to the importing file
+- Lines starting with `#` are comments
+- Only **setup stages** (schema, data) are imported from the referenced files
+- Query and expect stages in imported files are ignored
+- Imported files can have their own imports (resolved recursively, depth-first)
+- Circular imports are detected and reported as errors
+
+**Execution order:**
+1. All import blocks are resolved first (recursively, depth-first)
+2. Setup stages from imported files execute in resolution order
+3. Local stages execute after all imports
+
+This allows fixtures to be runnable as standalone scenarios while also serving as
+reusable setup for other scenarios.
 
 ### Example Scenario File
 
@@ -156,6 +184,7 @@ pub enum StageKind {
     Data(String),
     Query(String),
     Expect(Expectation),
+    Import(Vec<String>),  // Paths to import
     Raw(String),
 }
 ```

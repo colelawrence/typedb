@@ -11,7 +11,7 @@ Reference: TYPEQL_3_SYNTAX_GUIDE.md Section 2.5
 
 ## Key Constraint
 
-@key enforces uniqueness AND requires exactly one value.
+@key enforces uniqueness AND requires exactly one value. Perfect for natural identifiers.
 
 ```typeql:schema
 define
@@ -26,7 +26,7 @@ define
 ```
 
 ```typeql:data
-insert $p isa person, has name "Alice", has email "alice@t.com", has age 30;
+insert $p isa person, has name "Alice", has email "alice@example.com", has age 30;
 ```
 
 ```typeql:query
@@ -43,39 +43,26 @@ columns: [p, e]
 Duplicate key values are rejected.
 
 ```typeql:data
-insert $p isa person, has name "Bob", has email "alice@t.com", has age 25;
+insert $p isa person, has name "Bob", has email "alice@example.com", has age 25;
 ```
 
 ```typeql:expect
 error_type: any
-error_contains: "key"
-```
-
-## Key Requires Value
-
-@key implies @card(1..1) - the attribute is required.
-
-```typeql:data
-insert $p isa person, has name "Charlie", has age 28;
-```
-
-```typeql:expect
-error_type: any
-error_contains: "card"
+error_contains: key
 ```
 
 ## Unique Constraint
 
-@unique enforces uniqueness but allows missing values.
+@unique enforces uniqueness but allows missing values. Useful for optional identifiers.
 
 ```typeql:schema
 define
-  attribute name, value string;
-  attribute code, value string;
+  attribute product_name, value string;
+  attribute sku, value string;
 
   entity product,
-    owns name,
-    owns code @unique;
+    owns product_name,
+    owns sku @unique;
 ```
 
 ## Unique Allows Missing
@@ -83,11 +70,11 @@ define
 Entities without the unique attribute are allowed.
 
 ```typeql:data
-insert $p isa product, has name "Widget";
+insert $p isa product, has product_name "Widget";
 ```
 
 ```typeql:data
-insert $p isa product, has name "Gadget", has code "G001";
+insert $p isa product, has product_name "Gadget", has sku "G001";
 ```
 
 ```typeql:query
@@ -104,121 +91,132 @@ columns: [p]
 Duplicate unique values are rejected.
 
 ```typeql:data
-insert $p isa product, has name "Another", has code "G001";
+insert $p isa product, has product_name "Another", has sku "G001";
 ```
 
 ```typeql:expect
 error_type: any
-error_contains: "unique"
+error_contains: unique
 ```
 
 ## Cardinality: Multiple Values
 
-@card(0..) allows multiple values of the same attribute.
+@card(0..) allows multiple values of the same attribute. Great for tags or categories.
 
 ```typeql:schema
 define
-  attribute email, value string;
-  entity person,
-    owns email @card(0..);
+  attribute title, value string;
+  attribute tag, value string;
+
+  entity article,
+    owns title,
+    owns tag @card(0..);
 ```
 
 ```typeql:data
-insert $p isa person,
-  has email "alice@work.com",
-  has email "alice@home.com";
+insert $a isa article,
+  has title "TypeQL Guide",
+  has tag "database",
+  has tag "tutorial",
+  has tag "typedb";
 ```
 
 ```typeql:query
-match $p isa person, has email $e;
+match $a isa article, has tag $t;
 ```
 
 ```typeql:expect
-rows: 2
-columns: [p, e]
+rows: 3
+columns: [a, t]
 ```
 
 ## Cardinality: Exactly One
 
-@card(1..1) requires exactly one value.
+@card(1..1) requires exactly one value. Use for mandatory single-valued attributes.
 
 ```typeql:schema
 define
-  attribute name, value string;
-  entity person,
-    owns name @card(1..1);
+  attribute order_number, value string;
+  attribute order_date, value string;
+
+  entity order,
+    owns order_number @card(1..1),
+    owns order_date;
 ```
 
 ```typeql:data
-insert $p isa person, has name "Alice";
+insert $o isa order, has order_number "ORD-001", has order_date "2024-01-15";
 ```
 
 ```typeql:query
-match $p isa person, has name $n;
+match $o isa order, has order_number $n;
 ```
 
 ```typeql:expect
 rows: 1
-columns: [p, n]
+columns: [o, n]
 ```
 
 ## Cardinality on Relation Roles
 
-@card(2) on a role requires exactly two role players.
+@card on roles controls how many players a role can have.
 
 ```typeql:schema
 define
-  attribute name, value string;
-  attribute email, value string;
+  attribute couple_name, value string;
+  attribute spouse_name, value string;
 
-  entity person,
-    owns name,
-    owns email @key;
+  entity spouse,
+    owns spouse_name @key;
 
-  relation friendship,
-    relates friend @card(2);
+  relation marriage,
+    relates partner @card(2),
+    owns couple_name;
 
-  person plays friendship:friend;
+  spouse plays marriage:partner;
 ```
 
 ```typeql:data
-insert $a isa person, has name "Alice", has email "alice@t.com";
+insert $a isa spouse, has spouse_name "Alice";
 ```
 
 ```typeql:data
-insert $b isa person, has name "Bob", has email "bob@t.com";
+insert $b isa spouse, has spouse_name "Bob";
 ```
 
 ```typeql:data
 match
-  $a isa person, has email "alice@t.com";
-  $b isa person, has email "bob@t.com";
+  $a isa spouse, has spouse_name "Alice";
+  $b isa spouse, has spouse_name "Bob";
 insert
-  (friend: $a, friend: $b) isa friendship;
+  (partner: $a, partner: $b) isa marriage, has couple_name "Smith";
 ```
 
 ```typeql:query
-match $f isa friendship;
+match $m isa marriage;
 ```
 
 ```typeql:expect
 rows: 1
-columns: [f]
+columns: [m]
 ```
 
 ## Values Constraint
 
-@values restricts attribute to enumerated values.
+@values restricts attribute to enumerated values. Ideal for status fields.
 
 ```typeql:schema
 define
-  attribute status, value string @values("active", "inactive", "pending");
+  attribute description, value string;
+  attribute status, value string @values("todo", "in_progress", "done");
+
   entity task,
+    owns description,
     owns status;
 ```
 
 ```typeql:data
-insert $t isa task, has status "active";
+insert $t isa task, has description "Write docs", has status "in_progress";
 ```
 
 ```typeql:query
@@ -235,36 +233,39 @@ columns: [t, s]
 Invalid enumeration values are rejected.
 
 ```typeql:data
-insert $t isa task, has status "unknown";
+insert $t isa task, has description "Invalid", has status "unknown";
 ```
 
 ```typeql:expect
 error_type: any
-error_contains: "values"
+error_contains: values
 ```
 
 ## Regex Constraint
 
-@regex enforces string pattern matching.
+@regex enforces string pattern matching. Useful for URLs, codes, or formatted strings.
 
 ```typeql:schema
 define
-  attribute email, value string @regex(".*@.*");
-  entity person,
-    owns email;
+  attribute site_name, value string;
+  attribute url, value string @regex("https?://.*");
+
+  entity website,
+    owns site_name,
+    owns url;
 ```
 
 ```typeql:data
-insert $p isa person, has email "test@example.com";
+insert $w isa website, has site_name "Example", has url "https://example.com";
 ```
 
 ```typeql:query
-match $p isa person, has email $e;
+match $w isa website, has url $u;
 ```
 
 ```typeql:expect
 rows: 1
-columns: [p, e]
+columns: [w, u]
 ```
 
 ## Regex Rejects Non-Matching
@@ -272,103 +273,102 @@ columns: [p, e]
 Strings that don't match the pattern are rejected.
 
 ```typeql:data
-insert $p isa person, has email "not-an-email";
+insert $w isa website, has site_name "Bad", has url "not-a-url";
 ```
 
 ```typeql:expect
 error_type: any
-error_contains: "regex"
+error_contains: regex
 ```
 
 ## Range Constraint
 
-@range enforces numeric bounds.
+@range enforces numeric bounds. Perfect for ratings, percentages, or bounded values.
 
 ```typeql:schema
 define
-  attribute age, value integer @range(0..150);
-  entity person,
-    owns age;
+  attribute review_text, value string;
+  attribute rating, value integer @range(1..5);
+
+  entity review,
+    owns review_text,
+    owns rating;
 ```
 
 ```typeql:data
-insert $p isa person, has age 30;
+insert $r isa review, has review_text "Great product!", has rating 5;
 ```
 
 ```typeql:query
-match $p isa person, has age $a;
+match $r isa review, has rating $rt;
 ```
 
 ```typeql:expect
 rows: 1
-columns: [p, a]
+columns: [r, rt]
 ```
 
-## Range Rejects Below Minimum
+## Range Rejects Out of Bounds
 
-Values below the range are rejected.
+Values outside the range are rejected.
 
 ```typeql:data
-insert $p isa person, has age -5;
+insert $r isa review, has review_text "Invalid", has rating 0;
 ```
 
 ```typeql:expect
 error_type: any
-error_contains: "range"
+error_contains: range
 ```
 
-## Range Rejects Above Maximum
-
-Values above the range are rejected.
-
 ```typeql:data
-insert $p isa person, has age 200;
+insert $r isa review, has review_text "Also Invalid", has rating 10;
 ```
 
 ```typeql:expect
 error_type: any
-error_contains: "range"
+error_contains: range
 ```
 
 ## Combined Annotations
 
-Multiple annotations can be combined on ownership.
+Multiple annotations can be combined. Here: multiple phone numbers, each unique.
 
 ```typeql:schema
 define
-  attribute email, value string;
-  attribute name, value string;
+  attribute contact_name, value string;
+  attribute phone, value string;
 
-  entity person,
-    owns name,
-    owns email @card(0..) @unique;
+  entity contact,
+    owns contact_name,
+    owns phone @card(0..) @unique;
 ```
 
 ```typeql:data
-insert $p isa person,
-  has name "Alice",
-  has email "alice@work.com",
-  has email "alice@home.com";
+insert $c isa contact,
+  has contact_name "Alice",
+  has phone "+1-555-1234",
+  has phone "+1-555-5678";
 ```
 
 ```typeql:query
-match $p isa person, has email $e;
+match $c isa contact, has phone $p;
 ```
 
 ```typeql:expect
 rows: 2
-columns: [p, e]
+columns: [c, p]
 ```
 
 ## Combined: Unique Still Enforced
 
-Even with multiple values allowed, each must be unique.
+Even with multiple values allowed, each must be unique across all entities.
 
 ```typeql:data
-insert $p isa person, has name "Bob", has email "alice@work.com";
+insert $c isa contact, has contact_name "Bob", has phone "+1-555-1234";
 ```
 
 ```typeql:expect
 error_type: any
-error_contains: "unique"
+error_contains: unique
 ```

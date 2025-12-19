@@ -123,6 +123,9 @@ define
 
 ```typeql:data
 insert $p isa person, has name "Alice";
+```
+
+```typeql:data
 insert $p isa person, has name "Bob";
 ```
 
@@ -146,7 +149,25 @@ columns: [p, n]
 | `typeql:data` | Data modification (`insert`/`delete`/`update`) |
 | `typeql:query` | Query to execute |
 | `typeql:expect` | Assertion on the preceding query's results |
-| `typeql:error` | Assert that preceding stage produces an error |
+| `import` | Import setup stages from other scenario files |
+
+### Imports
+
+Scenarios can import setup stages (schema, data) from other files:
+
+````markdown
+```import
+./fixtures/base-schema.md
+./fixtures/test-data.md
+```
+````
+
+**Key behaviors:**
+- Paths are relative to the importing file
+- Only **setup stages** (schema, data) are imported; queries and expects are skipped
+- Imports are resolved depth-first (nested imports work)
+- Circular imports are detected and reported as errors
+- Lines starting with `#` are comments
 
 ### Expectation Options
 

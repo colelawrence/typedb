@@ -12,7 +12,8 @@ use clap::{Parser, Subcommand};
 use colored::Colorize;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use typeql_scenario_parser::ScenarioParser;
+use typeql_scenario_embedded::EmbeddedBackend;
+use typeql_scenario_parser::{resolve_imports, FsFileLoader, ScenarioParser};
 use typeql_scenario_runner::{MockBackend, RunSummary, RunnerConfig, ScenarioRunner};
 
 #[derive(Parser)]
@@ -51,7 +52,7 @@ enum Commands {
         fail_fast: bool,
 
         /// Backend to use (embedded, mock)
-        #[arg(long, default_value = "mock")]
+        #[arg(long, default_value = "embedded")]
         backend: String,
 
         /// Filter scenarios by ID pattern
@@ -203,8 +204,9 @@ async fn cmd_run(
     let files = find_scenario_files(path, recursive)?;
     let parser = ScenarioParser::new();
 
-    // Parse all scenarios
+    // Parse all scenarios and resolve imports
     let mut scenarios = Vec::new();
+    let file_loader = FsFileLoader;
     for file in &files {
         match parser.parse_file(file) {
             Ok(scenario) => {
@@ -214,7 +216,17 @@ async fn cmd_run(
                         continue;
                     }
                 }
-                scenarios.push(scenario);
+
+                // Resolve imports
+                let resolved = match resolve_imports(scenario, &file_loader) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("{}: {}: {}", "Import error".red(), file.display(), e);
+                        return Err(format!("Failed to resolve imports in {}", file.display()));
+                    }
+                };
+
+                scenarios.push(resolved);
             }
             Err(e) => {
                 eprintln!("{}: {}: {}", "Parse error".red(), file.display(), e);
@@ -231,11 +243,7 @@ async fn cmd_run(
     // Create backend
     let backend: Box<dyn typeql_scenario_runner::TypeQLBackend> = match backend_name {
         "mock" => Box::new(MockBackend::new()),
-        "embedded" => {
-            // TODO: Implement embedded backend
-            eprintln!("{}: Embedded backend not yet implemented, using mock", "Warning".yellow());
-            Box::new(MockBackend::new())
-        }
+        "embedded" => Box::new(EmbeddedBackend::new()),
         _ => return Err(format!("Unknown backend: {}", backend_name)),
     };
 

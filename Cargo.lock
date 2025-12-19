@@ -5503,7 +5503,18 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.69",
  "tokio",
+ "typeql-scenario-embedded",
  "typeql-scenario-parser",
+ "typeql-scenario-runner",
+]
+
+[[package]]
+name = "typeql-scenario-embedded"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "tokio",
+ "typedb-embedded",
  "typeql-scenario-runner",
 ]
 

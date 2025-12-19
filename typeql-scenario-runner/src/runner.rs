@@ -85,18 +85,25 @@ impl ScenarioRunner {
 
         // Track the last query result for expectations
         let mut last_query_result: Option<Result<QueryResult, BackendError>> = None;
+        let stages = &scenario.stages;
 
         // Execute stages
-        for (idx, stage) in scenario.stages.iter().enumerate() {
+        for (idx, stage) in stages.iter().enumerate() {
             let stage_start = Instant::now();
             let stage_result = self
                 .run_stage(idx, stage, &mut last_query_result)
                 .await;
 
-            let stage_result = stage_result
+            let mut stage_result = stage_result
                 .with_label(stage.label.clone())
                 .with_line(stage.line_number)
                 .with_duration(stage_start.elapsed());
+
+            // Check if this is an expected failure (next stage expects an error)
+            // If so, mark it as success - the expect stage will validate the error
+            if !stage_result.success && self.next_stage_expects_error(stages, idx) {
+                stage_result.success = true;
+            }
 
             let failed = !stage_result.success;
             result.add_stage(stage_result);
@@ -131,6 +138,14 @@ impl ScenarioRunner {
                 self.check_expectation(index, last_result, expectation)
             }
             StageKind::Raw(typeql) => self.run_raw(index, typeql, last_result).await,
+            StageKind::Import(_) => {
+                // Import stages should be resolved before running
+                StageResult::fail_error(
+                    index,
+                    "import",
+                    "Import stage not resolved. Use resolve_imports() before running.",
+                )
+            }
         }
     }
 
@@ -216,6 +231,15 @@ impl ScenarioRunner {
                 Err(e) => StageResult::fail_error(index, "raw", e.to_string()),
             }
         }
+    }
+
+    /// Check if the next stage is an Expect that expects an error.
+    /// Used for deferred error handling - if a data/query stage fails
+    /// but the next stage expects an error, we don't count it as a failure.
+    fn next_stage_expects_error(&self, stages: &[Stage], current_idx: usize) -> bool {
+        stages.get(current_idx + 1).map_or(false, |next_stage| {
+            matches!(&next_stage.kind, StageKind::Expect(exp) if exp.expects_error())
+        })
     }
 
     fn check_expectation(

@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 typeql-scenario-parser = { path = "../typeql-scenario-parser" }
 typeql-scenario-runner = { path = "../typeql-scenario-runner" }
+typeql-scenario-embedded = { path = "../typeql-scenario-embedded" }
 clap = { version = "4.5", features = ["derive"] }
 glob = "0.3"
 serde = { version = "1.0", features = ["derive"] }

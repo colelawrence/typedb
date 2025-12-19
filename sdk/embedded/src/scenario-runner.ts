@@ -7,6 +7,20 @@
 /**
  * TypeQL Scenario Runner
  *
+ * @deprecated This TypeScript implementation is deprecated. Use the Rust CLI instead:
+ * ```bash
+ * cargo run -p typeql-scenario-cli -- run ./scenarios/
+ * ```
+ *
+ * The Rust implementation (`typeql-scenario-cli`) is now the primary scenario runner:
+ * - Full import resolution support
+ * - Embedded TypeDB backend via `typedb-embedded` crate
+ * - Better error messages and performance
+ *
+ * This file is retained for backwards compatibility but will be removed in a future release.
+ *
+ * ---
+ *
  * Executes TypeQL scenarios defined in Markdown files against the embedded database.
  * This provides a declarative way to test TypeQL queries and schemas.
  *
@@ -366,7 +380,8 @@ function resolvePath(importPath: string, basePath?: string): string {
   }
   // Handle relative paths
   if (importPath.startsWith('./') || importPath.startsWith('../')) {
-    const baseDir = basePath.replace(/\/[^/]*$/, ''); // Remove filename to get directory
+    const lastSlash = basePath.lastIndexOf('/');
+    const baseDir = lastSlash >= 0 ? basePath.slice(0, lastSlash) : '.';
     const parts = baseDir.split('/').filter(Boolean);
     const importParts = importPath.split('/').filter(Boolean);
 
@@ -390,9 +405,8 @@ function resolvePath(importPath: string, basePath?: string): string {
  * Used when importing a file as a fixture.
  */
 function extractSetupStages(scenario: Scenario): Stage[] {
-  return scenario.stages.filter(
-    (stage) => SETUP_STAGE_TYPES.includes(stage.kind.type as any)
-  );
+  const setupTypes: readonly string[] = SETUP_STAGE_TYPES;
+  return scenario.stages.filter((stage) => setupTypes.includes(stage.kind.type));
 }
 
 /**
@@ -921,7 +935,7 @@ function checkValuesUnordered(
 
   for (let i = 0; i < expected.length; i++) {
     const expectedStr = expected[i].map(String).join(',');
-    if (!actualStrings.some((a) => a.includes(expectedStr) || expectedStr.includes(a))) {
+    if (!actualStrings.some((a) => a === expectedStr)) {
       differences.push(`Missing row: ${JSON.stringify(expected[i])}`);
     }
   }

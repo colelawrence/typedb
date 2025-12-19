@@ -116,6 +116,11 @@ impl Stage {
         Self::new(StageKind::Expect(expectation))
     }
 
+    /// Create an import stage.
+    pub fn import(paths: Vec<String>) -> Self {
+        Self::new(StageKind::Import(paths))
+    }
+
     /// Set the label for this stage.
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
         self.label = Some(label.into());
@@ -147,6 +152,10 @@ pub enum StageKind {
 
     /// Raw TypeQL to execute (type inferred from content).
     Raw(String),
+
+    /// Import stage - file paths to import setup stages from.
+    /// Paths are relative to the importing file's directory.
+    Import(Vec<String>),
 }
 
 /// Expectations for query results or errors.
@@ -246,6 +255,14 @@ pub enum ParseError {
     /// Invalid expectation format.
     #[error("Invalid expectation format at line {line}: {message}")]
     InvalidExpectation { line: usize, message: String },
+
+    /// Circular import detected.
+    #[error("Circular import detected: {chain}")]
+    CircularImport { chain: String },
+
+    /// File not found during import resolution.
+    #[error("Import file not found: {path}")]
+    ImportNotFound { path: String },
 
     /// I/O error.
     #[error("IO error: {0}")]

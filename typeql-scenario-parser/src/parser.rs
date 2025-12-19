@@ -233,8 +233,13 @@ impl ScenarioParser {
                 Ok(Stage::expect(expectation))
             }
             "typeql" | "typeql:raw" => Ok(Stage::new(StageKind::Raw(content.to_string()))),
-            // Ignore non-typeql blocks
-            _ if !block_type.starts_with("typeql") => {
+            // Import blocks - parse paths from content
+            "import" | "typeql:import" => {
+                let paths = self.parse_import_paths(content);
+                Ok(Stage::import(paths))
+            }
+            // Ignore non-typeql blocks (except import)
+            _ if !block_type.starts_with("typeql") && block_type != "import" => {
                 Ok(Stage::new(StageKind::Raw(String::new())))
             }
             _ => Err(ParseError::UnknownBlockType {
@@ -242,6 +247,18 @@ impl ScenarioParser {
                 block_type: block_type.to_string(),
             }),
         }
+    }
+
+    /// Parse import paths from block content.
+    /// Lines starting with `#` are treated as comments.
+    /// Empty lines are ignored.
+    fn parse_import_paths(&self, content: &str) -> Vec<String> {
+        content
+            .lines()
+            .map(|line| line.trim())
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(|line| line.to_string())
+            .collect()
     }
 
     /// Parse expectation content.

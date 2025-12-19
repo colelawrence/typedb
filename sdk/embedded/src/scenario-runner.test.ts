@@ -739,6 +739,9 @@ entity person, owns name;
 
 \`\`\`typeql:data
 insert $p isa person, has name "Alice";
+\`\`\`
+
+\`\`\`typeql:data
 insert $p isa person, has name "Bob";
 \`\`\`
 `;
