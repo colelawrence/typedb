@@ -288,6 +288,76 @@ interface NodeError {
 | `takeProfile()` param | `number` (f64) | `bigint` (u64) |
 | Error utilities | `@typedb/embedded-node/errors` | N/A |
 
+## Development
+
+### Building from source
+
+```bash
+cd typedb-node
+
+# Install dependencies
+npm install
+
+# Build native module (debug)
+npx napi build --platform
+
+# Build native module (release)
+npx napi build --platform --release
+
+# Run tests
+bun test
+```
+
+### Cross-compilation
+
+Build for a specific target:
+
+```bash
+npx napi build --platform --release --target x86_64-apple-darwin
+npx napi build --platform --release --target aarch64-apple-darwin
+npx napi build --platform --release --target x86_64-unknown-linux-gnu
+npx napi build --platform --release --target aarch64-unknown-linux-gnu
+npx napi build --platform --release --target x86_64-pc-windows-msvc
+```
+
+### CI/CD
+
+The GitHub Actions workflow (`.github/workflows/typedb-node.yml`) automatically:
+
+1. Builds native binaries for all supported platforms
+2. Runs smoke tests to verify binaries load correctly
+3. Runs the full test suite
+4. Publishes to npm on tag push (`node-v*`)
+
+### Release Process
+
+1. Update version in `package.json`
+2. Commit changes: `git commit -m "chore(typedb-node): bump version to X.Y.Z"`
+3. Create and push tag: `git tag node-vX.Y.Z && git push origin node-vX.Y.Z`
+4. CI will build all platforms and publish to npm
+
+### Project Structure
+
+```
+typedb-node/
+├── src/
+│   ├── lib.rs          # Main napi exports
+│   ├── types.rs        # Result type definitions
+│   ├── error.rs        # Error conversion
+│   ├── convert.rs      # Type conversions
+│   └── timing.rs       # Profiling types
+├── tests/
+│   ├── basic.test.ts   # Core functionality tests
+│   ├── errors.test.ts  # Error utilities tests
+│   └── smoke.test.ts   # Packaging validation tests
+├── index.js            # Platform-specific loader
+├── index.d.ts          # TypeScript declarations
+├── errors.js           # Error utilities
+├── errors.d.ts         # Error type declarations
+├── Cargo.toml          # Rust dependencies
+└── package.json        # npm package config
+```
+
 ## License
 
 MPL-2.0

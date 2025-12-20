@@ -15,8 +15,8 @@
     }
   },
   "scripts": {
-    "build": "napi build --platform --release --js index.js --dts index.d.ts",
-    "build:debug": "napi build --platform",
+    "build": "napi build --platform --release --no-js",
+    "build:debug": "napi build --platform --no-js",
     "test": "bun test",
     "artifacts": "napi artifacts",
     "prepublishOnly": "napi prepublish -t npm"

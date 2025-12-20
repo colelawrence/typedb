@@ -1,0 +1,208 @@
+name: TypeDB Node-API
+
+on:
+  push:
+    branches:
+      - cole
+      - main
+    paths:
+      - 'typedb-node/**'
+      - 'embedded/**'
+      - 'query/**'
+      - 'executor/**'
+      - 'database/**'
+      - 'resource/**'
+      - '.github/workflows/typedb-node.yml'
+  pull_request:
+    paths:
+      - 'typedb-node/**'
+      - 'embedded/**'
+  workflow_dispatch:
+
+concurrency:
+  group: typedb-node-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            name: linux-x64-gnu
+            run-tests: true
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            name: linux-arm64-gnu
+            run-tests: true
+          - os: macos-13
+            target: x86_64-apple-darwin
+            name: darwin-x64
+            run-tests: true
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            name: darwin-arm64
+            run-tests: true
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            name: win32-x64-msvc
+            run-tests: true
+
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: typedb-node
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          shared-key: "typedb-node-${{ matrix.target }}"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build native module
+        run: npx napi build --platform --release --target ${{ matrix.target }} --no-js
+
+      - name: List build artifacts
+        run: ls -la *.node || dir *.node
+        shell: bash
+
+      - name: Run tests
+        if: matrix.run-tests
+        run: bun test
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bindings-${{ matrix.name }}
+          path: typedb-node/*.node
+          if-no-files-found: error
+
+  # Smoke test: download artifacts and verify they load on each OS
+  smoke-test:
+    needs: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            expected: linux-x64-gnu
+          - os: macos-13
+            expected: darwin-x64
+          - os: macos-latest
+            expected: darwin-arm64
+          - os: windows-latest
+            expected: win32-x64-msvc
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: bindings-${{ matrix.expected }}
+          path: typedb-node/
+
+      - name: List downloaded files
+        run: ls -la typedb-node/
+        shell: bash
+
+      - name: Install dependencies
+        working-directory: typedb-node
+        run: npm install
+
+      - name: Smoke test - load module
+        working-directory: typedb-node
+        run: |
+          node -e "
+            const { Database } = require('./index.js');
+            const db = new Database('smoke_test');
+            console.log('✓ Database created:', db.name);
+            const tx = db.transactionSchema();
+            const result = tx.execute('define entity person;');
+            console.log('✓ Schema executed:', result.success);
+            tx.commit();
+            console.log('✓ Smoke test passed');
+          "
+
+      - name: Run full test suite
+        working-directory: typedb-node
+        run: bun test
+
+  # Package for npm (only on tag push)
+  package:
+    needs: [build, smoke-test]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/node-v')
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: typedb-node/
+          pattern: bindings-*
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la typedb-node/
+
+      - name: Verify all binaries present
+        run: |
+          cd typedb-node
+          for platform in darwin-arm64 darwin-x64 linux-arm64-gnu linux-x64-gnu win32-x64-msvc; do
+            if [ ! -f "typedb-node.${platform}.node" ]; then
+              echo "Missing: typedb-node.${platform}.node"
+              exit 1
+            fi
+            echo "✓ Found: typedb-node.${platform}.node"
+          done
+
+      - name: Publish to npm
+        working-directory: typedb-node
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
