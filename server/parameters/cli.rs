@@ -30,6 +30,12 @@ pub struct CLIArgs {
     #[arg(long = "server.http.address")]
     pub server_http_address: Option<String>,
 
+    /// Path to Unix socket for HTTP endpoint (mutually exclusive with --server.http.address)
+    /// Supports relative paths (resolved from working directory) and absolute paths.
+    /// Example: --server.http.unix-socket /var/run/typedb/http.sock
+    #[arg(long = "server.http.unix-socket", value_name = "PATH")]
+    pub server_http_unix_socket: Option<String>,
+
     /// Enable/disable including an auto-login token in the Studio URL printed at startup.
     /// When enabled, the URL will contain a JWT hash fragment that allows automatic authentication.
     #[arg(long = "server.http.studio.auto-login-token")]

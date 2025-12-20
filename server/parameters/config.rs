@@ -43,7 +43,10 @@ pub struct ServerConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct HttpEndpointConfig {
     pub(crate) enabled: bool,
-    pub(crate) address: String,
+    #[serde(default)]
+    pub(crate) address: Option<String>,
+    #[serde(default)]
+    pub(crate) unix_socket: Option<PathBuf>,
     #[serde(default)]
     pub(crate) studio: StudioConfig,
 }
@@ -205,6 +208,7 @@ impl ConfigBuilder {
             server_address,
             server_http_enabled,
             server_http_address,
+            server_http_unix_socket,
             server_http_studio_auto_login_token,
             server_authentication_token_expiration_seconds,
             server_encryption_enabled,
@@ -224,7 +228,9 @@ impl ConfigBuilder {
         override_config! {
             config.server.address => server_address;
             config.server.http.enabled => server_http_enabled;
-            config.server.http.address => server_http_address;
+            config.server.http.address => server_http_address.map(Some);
+            config.server.http.unix_socket => server_http_unix_socket
+                .map(|path| Some(CLIArgs::resolve_path_from_pwd(&path.into())));
             config.server.http.studio.auto_login_token => server_http_studio_auto_login_token;
             config.server.authentication.token_expiration => server_authentication_token_expiration_seconds.map(|secs| Duration::new(secs, 0));
 
@@ -260,6 +266,49 @@ impl ConfigBuilder {
                 message: "Server encryption was enabled, but certificate key was not configured.",
             });
         }
+        if config.server.http.enabled {
+            let http_config = &config.server.http;
+            if http_config.address.is_some() && http_config.unix_socket.is_some() {
+                return Err(ConfigError::ValidationError {
+                    message:
+                        "Cannot configure both HTTP TCP address and Unix socket. Use either --server.http.address or --server.http.unix-socket, not both.",
+                });
+            }
+            if http_config.address.is_none() && http_config.unix_socket.is_none() {
+                return Err(ConfigError::ValidationError {
+                    message: "HTTP endpoint is enabled, but neither address nor unix-socket is configured.",
+                });
+            }
+            #[cfg(not(unix))]
+            if http_config.unix_socket.is_some() {
+                return Err(ConfigError::ValidationError {
+                    message: "Unix socket support is only available on Unix-like operating systems (Linux, macOS, BSD).",
+                });
+            }
+            if let Some(unix_socket) = http_config.unix_socket.as_ref() {
+                if unix_socket.as_os_str().is_empty() {
+                    return Err(ConfigError::ValidationError {
+                        message: "HTTP unix-socket path must not be empty.",
+                    });
+                }
+                #[cfg(unix)]
+                {
+                    use std::os::unix::ffi::OsStrExt;
+                    const MAX_UNIX_SOCKET_PATH_LEN: usize = 1000;
+                    let bytes = unix_socket.as_os_str().as_bytes();
+                    if bytes.iter().any(|byte| *byte == 0) {
+                        return Err(ConfigError::ValidationError {
+                            message: "HTTP unix-socket path must not contain null bytes.",
+                        });
+                    }
+                    if bytes.len() > MAX_UNIX_SOCKET_PATH_LEN {
+                        return Err(ConfigError::ValidationError {
+                            message: "HTTP unix-socket path is too long.",
+                        });
+                    }
+                }
+            }
+        }
         // finalise:
         config.storage.data_directory = Self::resolve_path_from_executable(&config.storage.data_directory);
         config.logging.directory = Self::resolve_path_from_executable(&config.logging.directory);
@@ -287,7 +336,12 @@ impl ConfigBuilder {
     }
 
     pub fn server_http_address(mut self, address: impl Into<String>) -> Self {
-        self.config.server.http.address = address.into();
+        self.config.server.http.address = Some(address.into());
+        self
+    }
+
+    pub fn server_http_unix_socket(mut self, path: impl Into<PathBuf>) -> Self {
+        self.config.server.http.unix_socket = Some(path.into());
         self
     }
 
@@ -319,7 +373,7 @@ impl ConfigBuilder {
 
 #[cfg(test)]
 pub mod tests {
-    use std::path::PathBuf;
+    use std::{path::PathBuf, time::SystemTime};
 
     use assert as assert_true;
     use clap::Parser;
@@ -345,6 +399,15 @@ pub mod tests {
         let cli_args: CLIArgs = CLIArgs::parse_from(args_with_binary_infront);
         config.override_with_cliargs(cli_args);
         config.build()
+    }
+
+    fn write_temp_config(contents: &str) -> PathBuf {
+        let nanos = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("typedb-config-test-{nanos}"));
+        std::fs::create_dir_all(&dir).expect("Failed to create temp config dir");
+        let path = dir.join("config.yml");
+        std::fs::write(&path, contents).expect("Failed to write temp config");
+        path
     }
 
     #[test]
@@ -397,5 +460,130 @@ pub mod tests {
             let args = vec!["--server.encryption.enabled", "true", "--server.encryption.certificate-key", "somekey"];
             assert_true!(matches!(load_and_parse(config_path(), args), Err(ConfigError::ValidationError { .. })));
         }
+    }
+
+    #[test]
+    fn unix_socket_only_from_config() {
+        let config_path = write_temp_config(
+            r#"
+server:
+    address: 0.0.0.0:1729
+    http:
+        enabled: true
+        address:
+        unix-socket: /tmp/typedb-http.sock
+
+    authentication:
+        token-expiration-seconds: 5000
+
+    encryption:
+        enabled: false
+        certificate:
+        certificate-key:
+        ca-certificate:
+
+storage:
+    data-directory: "data"
+
+logging:
+    directory: "logs"
+
+diagnostics:
+    monitoring:
+        enabled: true
+        port: 4104
+    reporting:
+        metrics: true
+        errors: true
+"#,
+        );
+        let config = load_and_parse(config_path, vec![]).unwrap();
+        assert_true!(config.server.http.address.is_none());
+        assert_true!(config.server.http.unix_socket.is_some());
+    }
+
+    #[test]
+    fn unix_socket_relative_path_resolved_from_pwd() {
+        let config_path = write_temp_config(
+            r#"
+server:
+    address: 0.0.0.0:1729
+    http:
+        enabled: true
+        address:
+
+    authentication:
+        token-expiration-seconds: 5000
+
+    encryption:
+        enabled: false
+        certificate:
+        certificate-key:
+        ca-certificate:
+
+storage:
+    data-directory: "data"
+
+logging:
+    directory: "logs"
+
+diagnostics:
+    monitoring:
+        enabled: true
+        port: 4104
+    reporting:
+        metrics: true
+        errors: true
+"#,
+        );
+        let config = load_and_parse(config_path, vec!["--server.http.unix-socket", "./typedb.sock"]).unwrap();
+        let expected = std::env::current_dir().unwrap().join("./typedb.sock");
+        assert_eq!(config.server.http.unix_socket.unwrap(), expected);
+    }
+
+    #[test]
+    fn unix_socket_and_address_conflict_is_flagged() {
+        let result =
+            load_and_parse(config_path(), vec!["--server.http.unix-socket", "/tmp/typedb-http.sock"]);
+        assert_true!(matches!(result, Err(ConfigError::ValidationError { .. })));
+    }
+
+    #[test]
+    fn unix_socket_empty_path_is_flagged() {
+        let config_path = write_temp_config(
+            r#"
+server:
+    address: 0.0.0.0:1729
+    http:
+        enabled: true
+        address:
+        unix-socket: ""
+
+    authentication:
+        token-expiration-seconds: 5000
+
+    encryption:
+        enabled: false
+        certificate:
+        certificate-key:
+        ca-certificate:
+
+storage:
+    data-directory: "data"
+
+logging:
+    directory: "logs"
+
+diagnostics:
+    monitoring:
+        enabled: true
+        port: 4104
+    reporting:
+        metrics: true
+        errors: true
+"#,
+        );
+        let result = load_and_parse(config_path, vec![]);
+        assert_true!(matches!(result, Err(ConfigError::ValidationError { .. })));
     }
 }

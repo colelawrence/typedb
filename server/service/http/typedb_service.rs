@@ -4,7 +4,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use axum::{
     extract::State,
@@ -30,6 +30,7 @@ use uuid::Uuid;
 
 use crate::{
     authentication::Accessor,
+    parameters::http::HttpListenAddress,
     service::{
         http::{
             diagnostics::{run_with_diagnostics, run_with_diagnostics_async},
@@ -67,7 +68,7 @@ struct TransactionInfo {
 #[derive(Clone, Debug)]
 pub(crate) struct TypeDBService {
     server_info: ServerInfo,
-    address: SocketAddr,
+    address: HttpListenAddress,
     server_state: Arc<BoxServerState>,
     transaction_services: Arc<RwLock<HashMap<Uuid, TransactionInfo>>>,
     _transaction_cleanup_job: Arc<TokioIntervalRunner>,
@@ -77,7 +78,7 @@ impl TypeDBService {
     const TRANSACTION_CHECK_INTERVAL: Duration = Duration::from_secs(5 * SECONDS_IN_MINUTE);
     const QUERY_ENDPOINT_COMMIT_DEFAULT: bool = true;
 
-    pub(crate) fn new(server_info: ServerInfo, address: SocketAddr, server_state: Arc<BoxServerState>) -> Self {
+    pub(crate) fn new(server_info: ServerInfo, address: HttpListenAddress, server_state: Arc<BoxServerState>) -> Self {
         let transaction_request_senders = Arc::new(RwLock::new(HashMap::new()));
 
         let controlled_transactions = transaction_request_senders.clone();
@@ -107,7 +108,7 @@ impl TypeDBService {
         transactions.retain(|_, info| !info.request_sender.is_closed());
     }
 
-    pub(crate) fn address(&self) -> &SocketAddr {
+    pub(crate) fn address(&self) -> &HttpListenAddress {
         &self.address
     }
 

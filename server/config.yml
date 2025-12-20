@@ -7,6 +7,8 @@ server:
     http:
         enabled: true
         address: 0.0.0.0:8000
+        # address and unix-socket are mutually exclusive
+        # unix-socket: /tmp/typedb-http.sock
 
     authentication:
         token-expiration-seconds: 5000

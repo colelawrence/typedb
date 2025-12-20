@@ -12,3 +12,5 @@ pub mod message;
 pub(crate) mod studio;
 pub(crate) mod transaction_service;
 pub(crate) mod typedb_service;
+#[cfg(unix)]
+pub(crate) mod unix_socket;

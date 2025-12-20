@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 pub mod cli;
 pub mod config;
+pub mod http;
 
 #[derive(Debug)]
 pub enum ConfigError {

@@ -8,7 +8,7 @@
 #![deny(elided_lifetimes_in_paths)]
 extern crate core;
 
-use std::{net::SocketAddr, sync::Arc};
+use std::{future::Future, net::SocketAddr, path::PathBuf, pin::Pin, sync::Arc};
 
 use axum_server::{tls_rustls::RustlsConfig, Handle};
 use database::database_manager::DatabaseManager;
@@ -20,11 +20,14 @@ use tokio::{
     net::lookup_host,
     sync::watch::{channel, Receiver, Sender},
 };
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{
     error::ServerOpenError,
-    parameters::config::{Config, EncryptionConfig},
+    parameters::{
+        config::{Config, EncryptionConfig, HttpEndpointConfig},
+        http::HttpListenAddress,
+    },
     service::{grpc, http},
     state::{BoxServerState, LocalServerState},
 };
@@ -98,10 +101,7 @@ impl Server {
 
         let grpc_address = Self::resolve_address(self.config.server.address).await;
         let http_address_opt = if self.config.server.http.enabled {
-            Some(
-                Self::validate_and_resolve_http_address(self.config.server.http.address.clone(), grpc_address.clone())
-                    .await?,
-            )
+            Some(Self::resolve_http_listen_address(&self.config.server.http, grpc_address).await?)
         } else {
             None
         };
@@ -114,15 +114,27 @@ impl Server {
         );
         let studio_base_path = self.config.server.http.studio.base_path.clone();
         let studio_enabled = http::studio::has_embedded_assets();
-        let http_server = if let Some(http_address) = http_address_opt {
-            let server = Self::serve_http(
-                self.server_info,
-                http_address,
-                &self.config.server.encryption,
-                studio_base_path.clone(),
-                self.server_state.clone(),
-                self.shutdown_receiver,
-            );
+        type BoxFuture = Pin<Box<dyn Future<Output = Result<(), ServerOpenError>> + Send>>;
+        let encryption_config = self.config.server.encryption.clone();
+        let http_server: Option<BoxFuture> = if let Some(http_address) = http_address_opt.clone() {
+            let server: BoxFuture = match http_address {
+                HttpListenAddress::Tcp(address) => Box::pin(Self::serve_http(
+                    self.server_info,
+                    address,
+                    encryption_config.clone(),
+                    studio_base_path.clone(),
+                    self.server_state.clone(),
+                    self.shutdown_receiver.clone(),
+                )),
+                HttpListenAddress::Unix(path) => Box::pin(Self::serve_http_unix(
+                    self.server_info,
+                    path,
+                    encryption_config.clone(),
+                    studio_base_path.clone(),
+                    self.server_state.clone(),
+                    self.shutdown_receiver.clone(),
+                )),
+            };
             Some(server)
         } else {
             None
@@ -141,7 +153,7 @@ impl Server {
         };
         Self::print_serving_information(
             grpc_address,
-            http_address_opt,
+            http_address_opt.as_ref(),
             &self.config.server.encryption,
             studio_enabled,
             studio_path,
@@ -188,14 +200,18 @@ impl Server {
     async fn serve_http(
         server_info: ServerInfo,
         address: SocketAddr,
-        encryption_config: &EncryptionConfig,
+        encryption_config: EncryptionConfig,
         studio_base_path: Option<String>,
         server_state: Arc<BoxServerState>,
         mut shutdown_receiver: Receiver<()>,
     ) -> Result<(), ServerOpenError> {
         let authenticator = http::authenticator::Authenticator::new(server_state.clone());
-        let service = http::typedb_service::TypeDBService::new(server_info, address, server_state.clone());
-        let encryption_config = http::encryption::prepare_tls_config(encryption_config)?;
+        let service = http::typedb_service::TypeDBService::new(
+            server_info,
+            HttpListenAddress::Tcp(address),
+            server_state.clone(),
+        );
+        let encryption_config = http::encryption::prepare_tls_config(&encryption_config)?;
         let http_service = Arc::new(service);
 
         let mut router = http::typedb_service::TypeDBService::create_protected_router(http_service.clone())
@@ -229,15 +245,82 @@ impl Server {
         .map_err(|source| ServerOpenError::HttpServe { address, source: Arc::new(source) })
     }
 
-    async fn validate_and_resolve_http_address(
-        http_address: String,
+    async fn serve_http_unix(
+        server_info: ServerInfo,
+        socket_path: PathBuf,
+        encryption_config: EncryptionConfig,
+        studio_base_path: Option<String>,
+        server_state: Arc<BoxServerState>,
+        _shutdown_receiver: Receiver<()>,
+    ) -> Result<(), ServerOpenError> {
+        let authenticator = http::authenticator::Authenticator::new(server_state.clone());
+        let service = http::typedb_service::TypeDBService::new(
+            server_info,
+            HttpListenAddress::Unix(socket_path.clone()),
+            server_state.clone(),
+        );
+        let encryption_config = http::encryption::prepare_tls_config(&encryption_config)?;
+        if encryption_config.is_some() {
+            warn!(
+                "HTTP TLS is configured but Unix socket HTTP does not support TLS yet; serving without TLS."
+            );
+        }
+        let http_service = Arc::new(service);
+
+        let mut router = http::typedb_service::TypeDBService::create_protected_router(http_service.clone())
+            .layer(authenticator)
+            .merge(http::typedb_service::TypeDBService::create_unprotected_router(http_service));
+
+        if let Some(studio_router) = http::studio::create_studio_router(studio_base_path) {
+            router = router.merge(studio_router);
+        }
+
+        #[cfg(unix)]
+        {
+            // TODO: Unix socket HTTP support requires axum 0.8+ for proper body type compatibility
+            // with hyper 0.14. For now, return an error indicating this feature is not yet available.
+            // See: https://github.com/tokio-rs/axum/blob/main/examples/unix-domain-socket/src/main.rs
+            //
+            // The implementation is blocked by:
+            // - axum 0.7.x Router implements Service<Request<axum::body::Body>>
+            // - hyper 0.14 Server expects Service<Request<hyper::Body>>
+            // - These are different types in axum 0.7, unified in axum 0.8+
+            let _ = (router, socket_path, _shutdown_receiver);
+            warn!(
+                "Unix socket HTTP is configured but not yet supported in this version. \
+                 This feature requires upgrading to axum 0.8+. Falling back to disabled HTTP."
+            );
+            // For now, just wait for shutdown signal without serving
+            // TODO: Remove this when axum 0.8 support is added
+            Err(ServerOpenError::HttpUnixSocketNotSupported {})
+        }
+
+        #[cfg(not(unix))]
+        {
+            let _ = socket_path;
+            let _ = shutdown_receiver;
+            Err(ServerOpenError::HttpUnixSocketNotSupported {})
+        }
+    }
+
+    async fn resolve_http_listen_address(
+        http_config: &HttpEndpointConfig,
         grpc_address: SocketAddr,
-    ) -> Result<SocketAddr, ServerOpenError> {
-        let http_address = Self::resolve_address(http_address).await;
+    ) -> Result<HttpListenAddress, ServerOpenError> {
+        if let Some(socket_path) = http_config.unix_socket.as_ref() {
+            #[cfg(not(unix))]
+            return Err(ServerOpenError::HttpUnixSocketNotSupported {});
+
+            #[cfg(unix)]
+            return Ok(HttpListenAddress::Unix(socket_path.clone()));
+        }
+
+        let http_address = http_config.address.clone().expect("HTTP address must be configured");
+        let http_address = HttpListenAddress::resolve_tcp(http_address).await;
         if grpc_address == http_address {
             return Err(ServerOpenError::GrpcHttpConflictingAddress { address: grpc_address });
         }
-        Ok(http_address)
+        Ok(HttpListenAddress::Tcp(http_address))
     }
 
     pub async fn resolve_address(address: String) -> SocketAddr {
@@ -259,7 +342,7 @@ impl Server {
 
     fn print_serving_information(
         grpc_address: SocketAddr,
-        http_address: Option<SocketAddr>,
+        http_address: Option<&HttpListenAddress>,
         encryption_config: &EncryptionConfig,
         studio_enabled: bool,
         studio_path: &str,
@@ -284,14 +367,29 @@ impl Server {
 
         if studio_enabled {
             if let Some(http_address) = http_address {
-                let scheme = if encryption_config.enabled { "https" } else { "http" };
-                let host = if http_address.ip().is_unspecified() { "localhost" } else { &http_address.ip().to_string() };
-                let hash_fragment = match &studio_auto_login_token {
-                    Some(token) => format!("#{token}"),
-                    None => String::new(),
-                };
-                println!();
-                println!("Studio UI:  {scheme}://{host}:{}{studio_path}{hash_fragment}", http_address.port());
+                match http_address {
+                    HttpListenAddress::Tcp(http_address) => {
+                        let scheme = if encryption_config.enabled { "https" } else { "http" };
+                        let host = if http_address.ip().is_unspecified() {
+                            "localhost"
+                        } else {
+                            &http_address.ip().to_string()
+                        };
+                        let hash_fragment = match &studio_auto_login_token {
+                            Some(token) => format!("#{token}"),
+                            None => String::new(),
+                        };
+                        println!();
+                        println!(
+                            "Studio UI:  {scheme}://{host}:{}{studio_path}{hash_fragment}",
+                            http_address.port()
+                        );
+                    }
+                    HttpListenAddress::Unix(path) => {
+                        println!();
+                        println!("Studio UI:  unix socket at {}", path.display());
+                    }
+                }
             }
         }
 

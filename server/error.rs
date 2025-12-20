@@ -40,5 +40,9 @@ typedb_error! {
         HttpTlsFailedConfiguration(22, "Failed to configure TLS for the HTTP server.", source: Arc<tokio_rustls::rustls::Error>),
         HttpTlsUnsetDefaultCryptoProvider(23, "Failed to install default crypto provider for the HTTP server TLS configuration."),
         HttpTlsPemFileError(24, "Invalid PEM file specified for the HTTP server.", source: Arc<tokio_rustls::rustls::pki_types::pem::Error>),
+        HttpUnixSocketBind(25, "Could not bind HTTP server to Unix socket '{path}'.", path: String, source: Arc<io::Error>),
+        HttpUnixSocketCleanup(26, "Could not remove existing Unix socket file '{path}'.", path: String, source: Arc<io::Error>),
+        HttpUnixSocketCreateDir(27, "Could not create directory for Unix socket '{path}'.", path: String, source: Arc<io::Error>),
+        HttpUnixSocketNotSupported(28, "Unix sockets are not supported on this platform."),
     }
 }
