@@ -293,17 +293,16 @@ impl ConfigBuilder {
                 }
                 #[cfg(unix)]
                 {
-                    use std::os::unix::ffi::OsStrExt;
-                    const MAX_UNIX_SOCKET_PATH_LEN: usize = 1000;
+                    use std::os::unix::{ffi::OsStrExt, net::SocketAddr as StdUnixSocketAddr};
                     let bytes = unix_socket.as_os_str().as_bytes();
                     if bytes.iter().any(|byte| *byte == 0) {
                         return Err(ConfigError::ValidationError {
                             message: "HTTP unix-socket path must not contain null bytes.",
                         });
                     }
-                    if bytes.len() > MAX_UNIX_SOCKET_PATH_LEN {
+                    if StdUnixSocketAddr::from_pathname(unix_socket).is_err() {
                         return Err(ConfigError::ValidationError {
-                            message: "HTTP unix-socket path is too long.",
+                            message: "HTTP unix-socket path is invalid or too long.",
                         });
                     }
                 }

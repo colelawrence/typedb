@@ -26,6 +26,7 @@ The implementation uses axum's native Unix socket support via `tokio::net::UnixL
 - Configuration validation enforces mutual exclusivity between HTTP TCP address and Unix socket and rejects empty Unix socket paths.
 - Introduced `HttpListenAddress` enum (`server/parameters/http.rs`) to represent TCP or Unix listen addresses and to standardize display formatting.
 - TLS over Unix sockets is not yet implemented; when TLS is configured, a warning is emitted.
+- Axum stack upgrade in progress (axum 0.8, axum-extra 0.12, tower 0.5, axum-server 0.8); HTTP routes updated to `{param}` syntax and async-trait shims removed for request extractors.
 
 **Critical Discovery: axum 0.7.x / hyper 0.14 Incompatibility**
 
@@ -35,7 +36,7 @@ The axum 0.7.x version used by this project does not natively support Unix socke
 
 2. **Body type incompatibility**: axum 0.7.x Router implements `Service<Request<axum::body::Body>>` while hyper 0.14 Server expects `Service<Request<hyper::Body>>`. These are different types, making direct integration impossible.
 
-3. **Current implementation status**: Unix socket configuration is fully implemented (Phases 1-2 complete), but actual serving returns `ServerOpenError::HttpUnixSocketNotSupported` with a warning message indicating axum 0.8+ is required.
+3. **Current implementation status**: Unix socket configuration is fully implemented (Phases 1-2 complete). The HTTP serving path has been re-enabled in code alongside the axum 0.8 upgrade, but still needs compile/runtime verification.
 
 **Test Results (2024-12-20)**
 - `cargo test -p server`: **11 tests passed**

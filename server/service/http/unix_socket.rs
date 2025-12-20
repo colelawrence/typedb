@@ -4,9 +4,40 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! Unix socket HTTP serving support.
-//!
-//! Note: axum 0.7.x does not have native Unix socket support with IncomingStream,
-//! so Unix socket serving is implemented using hyper 0.14 directly in lib.rs.
-//! This module exists for organizational purposes and may be expanded in the future
-//! when upgrading to axum 0.8+.
+#![cfg(unix)]
+
+use std::sync::Arc;
+
+use axum::extract::connect_info;
+use axum::serve::IncomingStream;
+use tokio::net::{unix::UCred, UnixListener};
+use tracing::warn;
+
+#[derive(Clone, Debug)]
+pub(crate) struct UdsConnectInfo {
+    pub(crate) peer_addr: Option<Arc<tokio::net::unix::SocketAddr>>,
+    pub(crate) peer_cred: Option<UCred>,
+}
+
+impl connect_info::Connected<IncomingStream<'_, UnixListener>> for UdsConnectInfo {
+    fn connect_info(stream: IncomingStream<'_, UnixListener>) -> Self {
+        let peer_addr = match stream.io().peer_addr() {
+            Ok(addr) => Some(Arc::new(addr)),
+            Err(error) => {
+                warn!("Failed to read Unix socket peer address: {error}");
+                None
+            }
+        };
+        let peer_cred = match stream.io().peer_cred() {
+            Ok(cred) => Some(cred),
+            Err(error) => {
+                warn!("Failed to read Unix socket peer credentials: {error}");
+                None
+            }
+        };
+        Self {
+            peer_addr,
+            peer_cred,
+        }
+    }
+}

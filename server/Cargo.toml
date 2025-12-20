@@ -78,19 +78,14 @@ dev-dependencies = {}
 		tag = "3.7.0"
 		default-features = false
 
-	[dependencies.hyper]
-		features = ["client", "default", "full", "h2", "http1", "http2", "runtime", "server", "socket2", "stream", "tcp"]
-		version = "0.14.32"
-		default-features = false
-
 	[dependencies.tower]
-		features = ["__common", "balance", "buffer", "default", "discover", "filter", "futures-core", "futures-util", "indexmap", "limit", "load", "log", "make", "pin-project", "pin-project-lite", "rand", "ready-cache", "slab", "tokio", "tokio-util", "tracing", "util"]
-		version = "0.4.13"
+		features = ["full", "log"]
+		version = "0.5.2"
 		default-features = false
 
 	[dependencies.axum]
 		features = ["default", "form", "http1", "json", "matched-path", "original-uri", "query", "tokio", "tower-log", "tracing", "ws"]
-		version = "0.7.9"
+		version = "0.8.8"
 		default-features = false
 
 	[dependencies.tracing]
@@ -136,7 +131,7 @@ dev-dependencies = {}
 
 	[dependencies.axum-extra]
 		features = ["default", "multipart", "tracing", "typed-header"]
-		version = "0.9.6"
+		version = "0.12.3"
 		default-features = false
 
 	[dependencies.http]
@@ -176,7 +171,7 @@ dev-dependencies = {}
 
 	[dependencies.storage]
 		path = "../storage"
-		features = ["rocksdb"]  # Required for RocksDB storage backend
+		features = ["rocksdb", "wal"]  # Required for RocksDB storage backend with WAL
 		default-features = false
 
 	[dependencies.error]
@@ -196,7 +191,7 @@ dev-dependencies = {}
 
 	[dependencies.database]
 		path = "../database"
-		features = []
+		features = ["rocksdb"]
 		default-features = false
 
 	[dependencies.chrono-tz]
@@ -275,8 +270,8 @@ dev-dependencies = {}
 		default-features = false
 
 	[dependencies.axum-server]
-		features = ["arc-swap", "default", "rustls", "rustls-pemfile", "rustls-pki-types", "tls-rustls-no-provider", "tokio-rustls"]
-		version = "0.7.2"
+		features = ["tls-rustls-no-provider"]
+		version = "0.8.0"
 		default-features = false
 
 	[dependencies.chrono]
@@ -300,4 +295,3 @@ dev-dependencies = {}
 
 	[dependencies.mime_guess]
 		version = "2"
-

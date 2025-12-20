@@ -4,7 +4,6 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 use axum::{
-    async_trait,
     extract::{FromRequest, Request},
     response::{IntoResponse, Response},
     Json,
@@ -27,7 +26,6 @@ impl<T> Into<Json<T>> for JsonBody<T> {
     }
 }
 
-#[async_trait]
 impl<T, S> FromRequest<S> for JsonBody<T>
 where
     T: DeserializeOwned,
@@ -39,7 +37,7 @@ where
         Json::from_request(req, state)
             .await
             .map(|json: Json<T>| json.into())
-            .map_err(|err| Self::Rejection::JsonBodyExpected { details: err.body_text() })
+            .map_err(|err| Self::Rejection::JsonBodyExpected { details: err.to_string() })
     }
 }
 

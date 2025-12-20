@@ -251,7 +251,7 @@ impl Server {
         encryption_config: EncryptionConfig,
         studio_base_path: Option<String>,
         server_state: Arc<BoxServerState>,
-        _shutdown_receiver: Receiver<()>,
+        mut shutdown_receiver: Receiver<()>,
     ) -> Result<(), ServerOpenError> {
         let authenticator = http::authenticator::Authenticator::new(server_state.clone());
         let service = http::typedb_service::TypeDBService::new(
@@ -277,26 +277,59 @@ impl Server {
 
         #[cfg(unix)]
         {
-            // TODO: Unix socket HTTP support requires axum 0.8+ for proper body type compatibility
-            // with hyper 0.14. For now, return an error indicating this feature is not yet available.
-            // See: https://github.com/tokio-rs/axum/blob/main/examples/unix-domain-socket/src/main.rs
-            //
-            // The implementation is blocked by:
-            // - axum 0.7.x Router implements Service<Request<axum::body::Body>>
-            // - hyper 0.14 Server expects Service<Request<hyper::Body>>
-            // - These are different types in axum 0.7, unified in axum 0.8+
-            let _ = (router, socket_path, _shutdown_receiver);
-            warn!(
-                "Unix socket HTTP is configured but not yet supported in this version. \
-                 This feature requires upgrading to axum 0.8+. Falling back to disabled HTTP."
-            );
-            // For now, just wait for shutdown signal without serving
-            // TODO: Remove this when axum 0.8 support is added
-            Err(ServerOpenError::HttpUnixSocketNotSupported {})
+            let router_service = router
+                .layer(http::typedb_service::TypeDBService::create_cors_layer())
+                .into_make_service_with_connect_info::<http::unix_socket::UdsConnectInfo>();
+
+            if let Err(source) = tokio::fs::remove_file(&socket_path).await {
+                if source.kind() != std::io::ErrorKind::NotFound {
+                    return Err(ServerOpenError::HttpUnixSocketCleanup {
+                        path: socket_path.display().to_string(),
+                        source: Arc::new(source),
+                    });
+                }
+            }
+
+            if let Some(parent) = socket_path.parent() {
+                tokio::fs::create_dir_all(parent).await.map_err(|source| {
+                    ServerOpenError::HttpUnixSocketCreateDir {
+                        path: socket_path.display().to_string(),
+                        source: Arc::new(source),
+                    }
+                })?;
+            }
+
+            let listener = tokio::net::UnixListener::bind(&socket_path).map_err(|source| {
+                ServerOpenError::HttpUnixSocketBind {
+                    path: socket_path.display().to_string(),
+                    source: Arc::new(source),
+                }
+            })?;
+
+            axum::serve(listener, router_service)
+                .with_graceful_shutdown(async move {
+                    shutdown_receiver.changed().await.ok();
+                })
+                .await
+                .map_err(|source| ServerOpenError::HttpUnixSocketServe {
+                    path: socket_path.display().to_string(),
+                    source: Arc::new(source),
+                })?;
+
+            if let Err(source) = tokio::fs::remove_file(&socket_path).await {
+                if source.kind() != std::io::ErrorKind::NotFound {
+                    return Err(ServerOpenError::HttpUnixSocketCleanup {
+                        path: socket_path.display().to_string(),
+                        source: Arc::new(source),
+                    });
+                }
+            }
+            Ok(())
         }
 
         #[cfg(not(unix))]
         {
+            let _ = router;
             let _ = socket_path;
             let _ = shutdown_receiver;
             Err(ServerOpenError::HttpUnixSocketNotSupported {})

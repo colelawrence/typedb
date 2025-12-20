@@ -44,5 +44,6 @@ typedb_error! {
         HttpUnixSocketCleanup(26, "Could not remove existing Unix socket file '{path}'.", path: String, source: Arc<io::Error>),
         HttpUnixSocketCreateDir(27, "Could not create directory for Unix socket '{path}'.", path: String, source: Arc<io::Error>),
         HttpUnixSocketNotSupported(28, "Unix sockets are not supported on this platform."),
+        HttpUnixSocketServe(29, "Could not serve HTTP on Unix socket '{path}'.", path: String, source: Arc<io::Error>),
     }
 }

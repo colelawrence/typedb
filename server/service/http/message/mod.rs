@@ -23,7 +23,6 @@ pub(crate) use stringify_kebab_case;
 
 macro_rules! from_request_parts_impl {
     ($struct_name:ident { $($field_name:ident : $field_ty:ty),* $(,)? }) => {
-        #[axum::async_trait]
         impl<S> axum::extract::FromRequestParts<S> for $struct_name
         where
             S: Send + Sync,

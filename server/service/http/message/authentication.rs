@@ -3,7 +3,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
-use axum::{async_trait, extract::FromRequestParts};
+use axum::extract::FromRequestParts;
 use http::request::Parts;
 use serde::{Deserialize, Serialize};
 
@@ -16,7 +16,6 @@ pub struct SigninPayload {
     pub password: String,
 }
 
-#[async_trait]
 impl<S> FromRequestParts<S> for Accessor
 where
     S: Send + Sync,

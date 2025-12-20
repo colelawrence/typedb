@@ -11,7 +11,6 @@ use std::{
 };
 
 use axum::{
-    async_trait,
     extract::{FromRequestParts, Path},
     response::{IntoResponse, Response},
     RequestPartsExt,
@@ -43,7 +42,6 @@ impl ProtocolVersion {
     const VERSION_PARAM: &'static str = "version";
 }
 
-#[async_trait]
 impl<S> FromRequestParts<S> for ProtocolVersion
 where
     S: Send + Sync,
