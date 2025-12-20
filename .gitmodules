@@ -10,3 +10,6 @@
 [submodule ".context/livestore"]
 	path = .context/livestore
 	url = https://github.com/livestorejs/livestore.git
+[submodule "typedb-web-studio"]
+	path = typedb-web-studio
+	url = https://github.com/colelawrence/typedb-web-studio.git
