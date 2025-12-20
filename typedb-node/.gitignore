@@ -1,0 +1,14 @@
+# Dependencies
+node_modules/
+
+# Build artifacts
+*.node
+target/
+
+# Lock files (regenerated)
+bun.lock
+package-lock.json
+
+# IDE
+.idea/
+.vscode/
