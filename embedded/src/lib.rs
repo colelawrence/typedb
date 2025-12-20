@@ -82,6 +82,10 @@ pub mod common_tests;
 pub use database_api::Database;
 pub use error::Error;
 pub use options::TransactionOptions as Options;
+pub use resource::profile::{
+    profiling_enabled, set_profiling_override, CommitProfileSnapshot, CompileProfileSnapshot, QueryProfileSnapshot,
+    StageProfileSnapshot, StepProfileSnapshot, StorageCountersSnapshot, TransactionProfileSnapshot,
+};
 pub use result::{AttributeValue, Row, Value};
 pub use schema::{
     AttributeTypeSchema, CardinalitySchema, EntityTypeSchema, OrderingSchema, OwnsSchema,

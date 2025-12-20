@@ -14,7 +14,10 @@ use encoding::value::value::Value as EncodingValue;
 use executor::ExecutionInterrupt;
 use lending_iterator::LendingIterator;
 use options::TransactionOptions;
-use resource::profile::{CommitProfile, StorageCounters};
+use resource::profile::{
+    profiling_enabled, CommitProfile, CommitProfileSnapshot, QueryProfileSnapshot, StorageCounters,
+    TransactionProfileSnapshot,
+};
 use storage::{durability_client::NoopDurabilityClient, snapshot::CommittableSnapshot};
 
 use crate::{
@@ -59,6 +62,11 @@ impl TransactionRead {
     /// ```
     pub fn query(&self, query: &str) -> Result<QueryResultIterator, Error> {
         execute_read_query(&self.inner, query)
+    }
+
+    /// Execute a read query and return results with a core profile snapshot.
+    pub fn query_with_profile(&self, query: &str) -> Result<(QueryResultIterator, QueryProfileSnapshot), Error> {
+        execute_read_query_with_profile(&self.inner, query)
     }
 
     /// Get the complete schema of the database.
@@ -133,6 +141,14 @@ impl TransactionWrite {
     pub fn execute(self, query: &str) -> Result<usize, Error> {
         execute_write_query(self.inner, query)
     }
+
+    /// Execute a write query and commit, returning the result and core profiles.
+    pub fn execute_with_profile(
+        self,
+        query: &str,
+    ) -> Result<(usize, QueryProfileSnapshot, CommitProfileSnapshot), Error> {
+        execute_write_query_with_profile(self.inner, query)
+    }
 }
 
 /// A schema transaction for schema modifications.
@@ -169,6 +185,12 @@ impl TransactionSchema {
         execute_schema_query(tx, query)
     }
 
+    /// Execute a schema query and return the core profile snapshot.
+    pub fn execute_with_profile(&mut self, query: &str) -> Result<QueryProfileSnapshot, Error> {
+        let tx = self.inner.as_mut().ok_or_else(|| Error::Transaction("Transaction already consumed".to_string()))?;
+        execute_schema_query_with_profile(tx, query)
+    }
+
     /// Commit the transaction, persisting all schema changes.
     ///
     /// After calling this, the transaction is consumed and cannot be used.
@@ -180,6 +202,14 @@ impl TransactionSchema {
         let tx = self.inner.take().ok_or_else(|| Error::Transaction("Transaction already consumed".to_string()))?;
         let (_, result) = tx.commit();
         result.map_err(|e| Error::Commit(format!("{:?}", e)))
+    }
+
+    /// Commit the transaction and return the core commit profile snapshot.
+    pub fn commit_with_profile(mut self) -> Result<TransactionProfileSnapshot, Error> {
+        let tx = self.inner.take().ok_or_else(|| Error::Transaction("Transaction already consumed".to_string()))?;
+        let (profile, result) = tx.commit();
+        result.map_err(|e| Error::Commit(format!("{:?}", e)))?;
+        Ok(profile.snapshot())
     }
 
     /// Roll back the transaction, discarding all changes.
@@ -293,6 +323,59 @@ fn execute_read_query(tx: &InnerTransactionRead, query: &str) -> Result<QueryRes
     Ok(QueryResultIterator::new(rows, var_names))
 }
 
+fn execute_read_query_with_profile(
+    tx: &InnerTransactionRead,
+    query: &str,
+) -> Result<(QueryResultIterator, QueryProfileSnapshot), Error> {
+    let parsed = typeql::parse_query(query)?;
+    let structure = parsed.into_structure();
+
+    let pipeline_query = match structure {
+        typeql::query::QueryStructure::Pipeline(p) => p,
+        typeql::query::QueryStructure::Schema(_) => {
+            return Err(Error::Query(
+                "Schema queries cannot be executed in a read transaction. Use transaction_schema().".to_string(),
+            ));
+        }
+    };
+
+    let snapshot = tx.snapshot.clone_inner();
+    let pipeline = tx
+        .query_manager
+        .prepare_read_pipeline(
+            snapshot,
+            &tx.type_manager,
+            tx.thing_manager.clone(),
+            &tx.function_manager,
+            &pipeline_query,
+            query,
+        )
+        .map_err(|e| Error::Query(format!("{:?}", e)))?;
+
+    let named_positions = extract_variable_positions(pipeline.rows_positions());
+    let var_names: Vec<String> = named_positions.iter().map(|(name, _)| name.clone()).collect();
+
+    let (mut iterator, context) = pipeline
+        .into_rows_iterator(ExecutionInterrupt::new_uninterruptible())
+        .map_err(|(e, _)| Error::Query(format!("{:?}", e)))?;
+
+    let mut rows = Vec::new();
+    while let Some(result) = iterator.next() {
+        let row_data = result.map_err(|e| Error::Query(format!("{:?}", e)))?;
+
+        let mut bindings = HashMap::new();
+        for (var_name, position) in &named_positions {
+            let v = row_data.get(*position);
+            bindings.insert(var_name.clone(), convert_variable_value(v, &context, &tx.type_manager));
+        }
+
+        rows.push(Row { bindings });
+    }
+
+    let profile_snapshot = context.profile.snapshot();
+    Ok((QueryResultIterator::new(rows, var_names), profile_snapshot))
+}
+
 fn execute_write_query(tx: InnerTransactionWrite, query: &str) -> Result<usize, Error> {
     let parsed = typeql::parse_query(query)?;
     let structure = parsed.into_structure();
@@ -338,6 +421,59 @@ fn execute_write_query(tx: InnerTransactionWrite, query: &str) -> Result<usize, 
     Ok(count)
 }
 
+fn execute_write_query_with_profile(
+    tx: InnerTransactionWrite,
+    query: &str,
+) -> Result<(usize, QueryProfileSnapshot, CommitProfileSnapshot), Error> {
+    let parsed = typeql::parse_query(query)?;
+    let structure = parsed.into_structure();
+
+    let pipeline_query = match structure {
+        typeql::query::QueryStructure::Pipeline(p) => p,
+        typeql::query::QueryStructure::Schema(_) => {
+            return Err(Error::Query(
+                "Schema queries cannot be executed in a write transaction. Use transaction_schema().".to_string(),
+            ));
+        }
+    };
+
+    let snapshot = tx.snapshot.into_inner();
+    let pipeline = tx
+        .query_manager
+        .prepare_write_pipeline(
+            snapshot,
+            &tx.type_manager,
+            tx.thing_manager.clone(),
+            &tx.function_manager,
+            &pipeline_query,
+            query,
+        )
+        .map_err(|(_, e)| Error::Query(format!("{:?}", e)))?;
+
+    let (mut iterator, context) = pipeline
+        .into_rows_iterator(ExecutionInterrupt::new_uninterruptible())
+        .map_err(|(e, _)| Error::Query(format!("{:?}", e)))?;
+
+    let mut count = 0;
+    while let Some(result) = iterator.next() {
+        result.map_err(|e| Error::Query(format!("{:?}", e)))?;
+        count += 1;
+    }
+
+    let snapshot = Arc::try_unwrap(context.snapshot)
+        .map_err(|_| Error::Transaction("Snapshot still in use".to_string()))?;
+    let mut commit_profile = CommitProfile::new(profiling_enabled());
+    commit_profile.start();
+    let commit_result = snapshot.commit(&mut commit_profile);
+    commit_profile.end();
+    commit_result.map_err(|e| Error::Commit(format!("{:?}", e)))?;
+
+    let query_profile_snapshot = context.profile.snapshot();
+    let commit_profile_snapshot = commit_profile.snapshot();
+
+    Ok((count, query_profile_snapshot, commit_profile_snapshot))
+}
+
 fn execute_schema_query(tx: &mut InnerTransactionSchema, query: &str) -> Result<(), Error> {
     let parsed = typeql::parse_query(query)?;
     let structure = parsed.into_structure();
@@ -358,6 +494,37 @@ fn execute_schema_query(tx: &mut InnerTransactionSchema, query: &str) -> Result<
         .map_err(|e| Error::Query(format!("{:?}", e)))?;
 
     Ok(())
+}
+
+fn execute_schema_query_with_profile(
+    tx: &mut InnerTransactionSchema,
+    query: &str,
+) -> Result<QueryProfileSnapshot, Error> {
+    let parsed = typeql::parse_query(query)?;
+    let structure = parsed.into_structure();
+
+    let schema_query = match structure {
+        typeql::query::QueryStructure::Schema(s) => s,
+        typeql::query::QueryStructure::Pipeline(_) => {
+            return Err(Error::Query(
+                "Pipeline queries cannot be executed in a schema transaction. Use transaction_write().".to_string(),
+            ));
+        }
+    };
+
+    let snapshot = tx.snapshot.as_mut().ok_or_else(|| Error::Transaction("Snapshot not available".to_string()))?;
+
+    let (result, profile) = tx.query_manager.execute_schema_with_profile(
+        snapshot,
+        &tx.type_manager,
+        &tx.thing_manager,
+        &tx.function_manager,
+        schema_query,
+        query,
+    );
+
+    result.map_err(|e| Error::Query(format!("{:?}", e)))?;
+    Ok(profile)
 }
 
 // ============================================================================
