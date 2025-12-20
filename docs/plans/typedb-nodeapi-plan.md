@@ -178,26 +178,59 @@ Verification:
 
 **Test Coverage:** 33 tests total (15 basic + 18 error)
 
-## Phase 4: Packaging, distribution, and CI
+## Phase 4: Packaging, distribution, and CI ✅ COMPLETED
 
 Objectives, scope, and dependencies:
 - Objective: Ship prebuilt binaries and validate installability across supported platforms.
 - Scope: Build artifacts, CI matrix, packaging layout, and install-time verification.
 - Dependencies: Native module build outputs and target platform requirements.
 
+**Current support matrix (from package.json napi.targets):**
+| Platform | Architecture | Target Triple |
+|----------|-------------|---------------|
+| macOS | x64 | x86_64-apple-darwin |
+| macOS | arm64 | aarch64-apple-darwin |
+| Linux | x64 (glibc) | x86_64-unknown-linux-gnu |
+| Linux | arm64 (glibc) | aarch64-unknown-linux-gnu |
+| Windows | x64 | x86_64-pc-windows-msvc |
+
+**Not yet supported:** Linux musl, Windows arm64, FreeBSD
+
 Task list with acceptance criteria:
 - Define supported platforms and architectures, plus a prebuild strategy.
   - Acceptance: A documented support matrix and release process.
+  - Note: Consider using `@napi-rs/cli` platform packages pattern for npm distribution
+  - ✅ DONE: Support matrix in README, release process documented
 - Add CI jobs to build, test, and package native binaries per target.
   - Acceptance: CI produces validated artifacts for each supported platform.
+  - Note: Use GitHub Actions matrix with `napi build --target <triple>`
+  - ✅ DONE: .github/workflows/typedb-node.yml with 5-platform matrix
 - Implement packaging validation checks (install + load + smoke query).
   - Acceptance: Packaging tests fail if binaries are missing or cannot be loaded.
+  - ✅ DONE: tests/smoke.test.ts + CI smoke test job
+- Replace hand-written index.js with napi-rs generated loader.
+  - Acceptance: Loader handles all target platforms including musl detection.
+  - ✅ DONE: Robust index.js with musl detection and helpful error messages
 
 Verification:
 - Test scenarios: Install from tarball, load native module, run minimal query, verify ABI compatibility.
 - Required coverage: Packaging tests for every supported platform and runtime.
 - Pass/fail criteria: Install succeeds and smoke tests pass on all targets.
 - Test implementation note: All tests must be implemented in the codebase (unit/integration/e2e), follow naming conventions and directory structure, and be re-runnable to prevent regressions.
+- ✅ 39 tests total (15 basic + 18 error + 6 smoke)
+
+### Phase 4 Summary
+
+**Deliverables:**
+- `index.js` - Robust platform loader with musl detection
+- `.github/workflows/typedb-node.yml` - CI workflow for 5 platforms
+- `tests/smoke.test.ts` - Packaging validation tests
+- README development section with build, cross-compile, and release instructions
+
+**CI Pipeline:**
+1. Build job: Matrix build for all 5 platforms
+2. Smoke test job: Verify binaries load on ubuntu/macos/windows
+3. Package job: Publish to npm on `node-v*` tags
 
 ## Phase 5: Compatibility, performance, and hardening
 
@@ -209,15 +242,39 @@ Objectives, scope, and dependencies:
 Task list with acceptance criteria:
 - Build a parity checklist against typedb-wasm behaviors and result schemas.
   - Acceptance: A documented matrix with pass/fail status and deviations.
+  - Note: Parity doc (typedb-nodeapi-parity.md) covers API; this adds behavioral testing
 - Add performance benchmarks for database creation, schema operations, and queries.
   - Acceptance: Benchmarks run and report stable metrics across runs.
+  - Note: Compare Node-API vs WASM vs Bun FFI performance
 - Add stress tests for repeated open/close cycles and large result sets.
   - Acceptance: Stress tests show no leaks or crashes.
+  - Note: Use `--expose-gc` for explicit GC in leak detection tests
 - Document known limitations and operational guidance.
   - Acceptance: Docs clearly list supported features and limitations.
+
+**Suggested benchmarks:**
+- Database creation latency (cold start)
+- Schema define/commit cycle
+- Bulk insert (1K, 10K, 100K entities)
+- Query throughput (simple match, join, aggregation)
+- Snapshot export/import (various sizes)
+- Memory usage over time
+
+**Stress test scenarios:**
+- 1000x database create/destroy cycle
+- 10000x transaction open/query/close cycle
+- Large result set (100K+ rows)
+- Concurrent transaction attempts (should fail gracefully)
 
 Verification:
 - Test scenarios: Long-running workloads, large dataset queries, repeated lifecycle operations.
 - Required coverage: Benchmarks for core operations and stress tests for lifecycle stability.
 - Pass/fail criteria: Benchmarks complete without errors and stress tests remain stable within defined thresholds.
 - Test implementation note: All tests must be implemented in the codebase (unit/integration/e2e), follow naming conventions and directory structure, and be re-runnable to prevent regressions.
+
+---
+
+## Related Documents
+
+- [API Parity Document](typedb-nodeapi-parity.md) - Full API comparison and deviation rationale
+- [typedb-node/README.md](../../typedb-node/README.md) - Package documentation
