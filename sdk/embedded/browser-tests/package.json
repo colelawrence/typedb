@@ -9,7 +9,9 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:ui": "vitest --ui",
-    "test:browser": "vitest run --browser.enabled --browser.headless --browser.name=chromium"
+    "test:browser": "vitest run --browser.enabled --browser.headless --browser.name=chromium",
+    "bench": "vitest run benchmarks/**/*.bench.ts --browser.enabled --browser.headless --browser.name=chromium",
+    "bench:ui": "vitest run benchmarks/**/*.bench.ts --browser.enabled --browser.name=chromium --ui"
   },
   "devDependencies": {
     "@vitest/browser": "^3.2.2",

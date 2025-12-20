@@ -23,8 +23,8 @@ export default defineConfig({
       instances: [{ browser: 'chromium' }],
       headless: true,
     },
-    include: ['tests/**/*.test.ts'],
-    testTimeout: 30000,
+    include: ['tests/**/*.test.ts', 'benchmarks/**/*.bench.ts'],
+    testTimeout: 60000, // Increased for benchmarks
   },
   optimizeDeps: {
     exclude: ['@typedb/embedded'],
