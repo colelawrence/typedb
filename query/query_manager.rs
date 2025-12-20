@@ -29,7 +29,7 @@ use ir::{
 };
 use resource::{
     perf_counters::{QUERY_CACHE_HITS, QUERY_CACHE_MISSES},
-    profile::{CompileProfile, QueryProfile},
+    profile::{profiling_enabled, CompileProfile, QueryProfile, QueryProfileSnapshot},
 };
 use storage::snapshot::{ReadableSnapshot, WritableSnapshot};
 use tracing::{event, Level};
@@ -65,7 +65,7 @@ impl QueryManager {
         source_query: &str,
     ) -> Result<(), Box<QueryError>> {
         event!(Level::TRACE, "Running schema query:\n{}", query);
-        let query_profile = QueryProfile::new(tracing::enabled!(Level::TRACE));
+        let query_profile = QueryProfile::new(profiling_enabled());
         let result = match query {
             SchemaQuery::Define(define) => {
                 let profile = query_profile.profile_stage(|| String::from("Define"), 0); // TODO executable id
@@ -111,6 +111,58 @@ impl QueryManager {
         result
     }
 
+    pub fn execute_schema_with_profile(
+        &self,
+        snapshot: &mut impl WritableSnapshot,
+        type_manager: &TypeManager,
+        thing_manager: &ThingManager,
+        function_manager: &FunctionManager,
+        query: SchemaQuery,
+        source_query: &str,
+    ) -> (Result<(), Box<QueryError>>, QueryProfileSnapshot) {
+        event!(Level::TRACE, "Running schema query:\n{}", query);
+        let query_profile = QueryProfile::new(profiling_enabled());
+        let result = match query {
+            SchemaQuery::Define(define) => {
+                let profile = query_profile.profile_stage(|| String::from("Define"), 0); // TODO executable id
+                let step_profile = profile.extend_or_get(0, || String::from("Define execution"));
+                define::execute(
+                    snapshot,
+                    type_manager,
+                    thing_manager,
+                    function_manager,
+                    define,
+                    step_profile.storage_counters(),
+                )
+                .map_err(|err| {
+                    Box::new(QueryError::Define { source_query: source_query.to_string(), typedb_source: err })
+                })
+            }
+            SchemaQuery::Redefine(redefine) => {
+                let profile = query_profile.profile_stage(|| String::from("Redefine"), 0); // TODO executable id
+                let step_profile = profile.extend_or_get(0, || String::from("Redefine execution"));
+                redefine::execute(
+                    snapshot,
+                    type_manager,
+                    thing_manager,
+                    function_manager,
+                    redefine,
+                    step_profile.storage_counters(),
+                )
+                .map_err(|err| {
+                    Box::new(QueryError::Redefine { source_query: source_query.to_string(), typedb_source: err })
+                })
+            }
+            SchemaQuery::Undefine(undefine) => {
+                undefine::execute(snapshot, type_manager, thing_manager, function_manager, undefine).map_err(|err| {
+                    Box::new(QueryError::Undefine { source_query: source_query.to_string(), typedb_source: err })
+                })
+            }
+        };
+
+        (result, query_profile.snapshot())
+    }
+
     pub fn prepare_read_pipeline<Snapshot: ReadableSnapshot + 'static>(
         &self,
         snapshot: Arc<Snapshot>,
@@ -121,7 +173,7 @@ impl QueryManager {
         source_query: &str,
     ) -> Result<Pipeline<Snapshot, ReadPipelineStage<Snapshot>>, Box<QueryError>> {
         event!(Level::TRACE, "Running read query:\n{}", query);
-        let mut query_profile = QueryProfile::new(tracing::enabled!(Level::TRACE));
+        let mut query_profile = QueryProfile::new(profiling_enabled());
         let compile_profile = query_profile.compilation_profile();
         compile_profile.start();
         // 1: Translate
@@ -200,7 +252,7 @@ impl QueryManager {
         source_query: &str,
     ) -> Result<Pipeline<Snapshot, WritePipelineStage<Snapshot>>, (Snapshot, Box<QueryError>)> {
         event!(Level::TRACE, "Running write query:\n{}", query);
-        let mut query_profile = QueryProfile::new(tracing::enabled!(Level::TRACE));
+        let mut query_profile = QueryProfile::new(profiling_enabled());
         let compile_profile = query_profile.compilation_profile();
         compile_profile.start();
         // 1: Translate
@@ -286,7 +338,7 @@ impl QueryManager {
         source_query: &str,
     ) -> Result<AnalysedQuery, Box<QueryError>> {
         event!(Level::TRACE, "Running analyse query:\n{}", query);
-        let mut query_profile = QueryProfile::new(tracing::enabled!(Level::TRACE));
+        let mut query_profile = QueryProfile::new(profiling_enabled());
         let compile_profile = query_profile.compilation_profile();
         compile_profile.start();
         // 1: Translate

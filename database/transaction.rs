@@ -21,7 +21,7 @@ use error::typedb_error;
 use function::{function_cache::FunctionCache, function_manager::FunctionManager, FunctionError};
 use options::TransactionOptions;
 use query::query_manager::QueryManager;
-use resource::profile::TransactionProfile;
+use resource::profile::{profiling_enabled, TransactionProfile};
 use storage::{
     durability_client::DurabilityClient,
     snapshot::{
@@ -29,7 +29,6 @@ use storage::{
         WriteSnapshot,
     },
 };
-use tracing::Level;
 
 use crate::Database;
 
@@ -81,7 +80,7 @@ impl<D: DurabilityClient> TransactionRead<D> {
             query_manager,
             database: DatabaseDropGuard::new(database),
             transaction_options,
-            profile: TransactionProfile::new(tracing::enabled!(Level::TRACE)),
+            profile: TransactionProfile::new(profiling_enabled()),
         })
     }
 
@@ -137,7 +136,7 @@ impl<D: DurabilityClient> TransactionWrite<D> {
             query_manager,
             database: DatabaseDropGuard::new_with_fn(database, Database::release_write_transaction),
             transaction_options,
-            profile: TransactionProfile::new(tracing::enabled!(Level::TRACE)),
+            profile: TransactionProfile::new(profiling_enabled()),
         })
     }
 
@@ -253,7 +252,7 @@ impl<D: DurabilityClient> TransactionSchema<D> {
             query_manager,
             database: DatabaseDropGuard::new_with_fn(database, Database::release_schema_transaction),
             transaction_options,
-            profile: TransactionProfile::new(tracing::enabled!(Level::TRACE)),
+            profile: TransactionProfile::new(profiling_enabled()),
         })
     }
 

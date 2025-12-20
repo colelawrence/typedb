@@ -39,7 +39,7 @@ use itertools::{Either, Itertools};
 use lending_iterator::LendingIterator;
 use options::QueryOptions;
 use query::error::QueryError;
-use resource::profile::{EncodingProfile, QueryProfile, StorageCounters};
+use resource::profile::{profiling_enabled, EncodingProfile, QueryProfile, StorageCounters};
 use storage::snapshot::ReadableSnapshot;
 use tokio::{
     sync::{
@@ -1094,7 +1094,7 @@ impl TransactionService {
             let timeout_at = self.timeout_at;
             let interrupt = self.query_interrupt_receiver.clone();
             tokio::spawn(async move {
-                let encoding_profile = EncodingProfile::new(tracing::enabled!(Level::TRACE));
+                let encoding_profile = EncodingProfile::new(profiling_enabled());
                 match answer.answer {
                     Either::Left((output_descriptor, batch, pipeline_structure)) => {
                         Self::submit_write_query_batch_answer(
