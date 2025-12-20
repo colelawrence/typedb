@@ -1,0 +1,20 @@
+[package]
+name = "typedb-bun"
+version = "0.1.0"
+edition = "2021"
+description = "Bun FFI bindings for TypeDB embedded database"
+license = "MPL-2.0"
+keywords = ["typedb", "database", "bun", "ffi", "javascript", "typescript"]
+categories = ["database", "api-bindings"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["memory"]
+memory = ["typedb-embedded/memory"]
+
+[dependencies]
+typedb-embedded = { path = "../embedded", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

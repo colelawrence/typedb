@@ -54,7 +54,7 @@ features = {}
 
 	[dev-dependencies.storage]
 		path = "storage"
-		features = ["rocksdb"]  # Required for RocksDB storage backend
+		features = ["rocksdb", "wal"]  # Required for RocksDB storage backend with WAL
 		default-features = false
 
 	[dev-dependencies.steps]
@@ -167,10 +167,9 @@ features = {}
 
 [workspace]
 	resolver = "2"
-	members = ["database/tools", "database", "answer", "util/test", "util/project", "durability/tests/crash/streamer", "durability/tests/crash/recoverer", "durability/tests/common", "durability", "ir", "tests/behaviour/steps", "tests/behaviour/steps/params", "tests/behaviour/service/http/http_steps", "encoding/tests", "encoding", "server", "user", "function", "storage/tests", "storage", "system", "common/options", "common/structural_equality", "common/logger", "common/cache", "common/bytes", "common/lending_iterator", "common/primitive", "common/concurrency", "common/iterator", "common/error", "concept/tests", "concept", "diagnostics", "executor", "resource", "query", "compiler", "typedb-embedded-testing", "typedb-embedded-testing/harness", "wasm-playground", "embedded", "typedb-wasm", "typeql-scenario-parser", "typeql-scenario-runner", "typeql-scenario-embedded", "typeql-scenario-cli"]
+	members = ["database/tools", "database", "answer", "util/test", "util/project", "durability/tests/crash/streamer", "durability/tests/crash/recoverer", "durability/tests/common", "durability", "ir", "tests/behaviour/steps", "tests/behaviour/steps/params", "tests/behaviour/service/http/http_steps", "encoding/tests", "encoding", "server", "user", "function", "storage/tests", "storage", "system", "common/options", "common/structural_equality", "common/logger", "common/cache", "common/bytes", "common/lending_iterator", "common/primitive", "common/concurrency", "common/iterator", "common/error", "concept/tests", "concept", "diagnostics", "executor", "resource", "query", "compiler", "typedb-embedded-testing", "typedb-embedded-testing/harness", "wasm-playground", "embedded", "typedb-wasm", "typedb-bun", "typedb-node", "typeql-scenario-parser", "typeql-scenario-runner", "typeql-scenario-embedded", "typeql-scenario-cli"]
 
 # Patch typeql to use local submodule for development
 # This redirects all `git = "https://github.com/typedb/typeql"` references
 [patch."https://github.com/typedb/typeql"]
 typeql = { path = "typeql/rust" }
-
