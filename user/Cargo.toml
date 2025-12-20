@@ -16,7 +16,7 @@ features = {}
 
 	[dependencies.database]
 		path = "../database"
-		features = []
+		features = ["rocksdb"]
 		default-features = false
 
 	[dependencies.system]
