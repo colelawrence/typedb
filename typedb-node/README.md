@@ -347,9 +347,11 @@ typedb-node/
 │   ├── convert.rs      # Type conversions
 │   └── timing.rs       # Profiling types
 ├── tests/
-│   ├── basic.test.ts   # Core functionality tests
-│   ├── errors.test.ts  # Error utilities tests
-│   └── smoke.test.ts   # Packaging validation tests
+│   ├── basic.test.ts      # Core functionality tests
+│   ├── benchmark.test.ts  # Performance benchmarks
+│   ├── errors.test.ts     # Error utilities tests
+│   ├── smoke.test.ts      # Packaging validation tests
+│   └── stress.test.ts     # Lifecycle stability tests
 ├── index.js            # Platform-specific loader
 ├── index.d.ts          # TypeScript declarations
 ├── errors.js           # Error utilities
@@ -357,6 +359,48 @@ typedb-node/
 ├── Cargo.toml          # Rust dependencies
 └── package.json        # npm package config
 ```
+
+## Known Limitations
+
+### In-Memory Only
+
+Databases are currently in-memory only. Data is not persisted to disk. Use `exportSnapshot()` / `importSnapshot()` to save and restore database state.
+
+### Single-Use Write Transactions
+
+Write transactions (`transactionWrite()`) are single-use:
+- After `execute()`, the transaction is consumed
+- Successful executions auto-commit
+- Failed executions auto-rollback
+- Attempting to reuse a consumed transaction returns an error
+
+```typescript
+const tx = db.transactionWrite();
+tx.execute("insert $p isa person;"); // Consumes transaction
+tx.execute("insert $q isa person;"); // Error: transaction already consumed
+```
+
+For multiple writes, use separate transactions or batch in a single query:
+```typescript
+tx.execute("insert $p isa person; $q isa person;");
+```
+
+### Synchronous API
+
+All operations are synchronous and block the event loop. For CPU-intensive workloads, consider using worker threads.
+
+### Platform Support
+
+- **Linux musl (Alpine)**: Not currently supported. Use glibc-based distributions.
+- **Windows ARM**: Not supported.
+- **32-bit platforms**: Not supported.
+
+### Transaction Lifecycle
+
+- Read transactions can execute multiple queries
+- Schema transactions can execute multiple operations before commit/rollback
+- Write transactions are single-operation
+- Using a closed/committed transaction returns an error (does not throw)
 
 ## License
 

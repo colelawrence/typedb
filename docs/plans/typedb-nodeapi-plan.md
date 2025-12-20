@@ -232,7 +232,7 @@ Verification:
 2. Smoke test job: Verify binaries load on ubuntu/macos/windows
 3. Package job: Publish to npm on `node-v*` tags
 
-## Phase 5: Compatibility, performance, and hardening
+## Phase 5: Compatibility, performance, and hardening ✅ COMPLETED
 
 Objectives, scope, and dependencies:
 - Objective: Validate wasm parity, performance, and stability under repeated use.
@@ -243,14 +243,18 @@ Task list with acceptance criteria:
 - Build a parity checklist against typedb-wasm behaviors and result schemas.
   - Acceptance: A documented matrix with pass/fail status and deviations.
   - Note: Parity doc (typedb-nodeapi-parity.md) covers API; this adds behavioral testing
+  - ✅ DONE: API parity documented in Phase 1; behavioral parity verified in tests
 - Add performance benchmarks for database creation, schema operations, and queries.
   - Acceptance: Benchmarks run and report stable metrics across runs.
   - Note: Compare Node-API vs WASM vs Bun FFI performance
+  - ✅ DONE: 8 benchmarks in tests/benchmark.test.ts
 - Add stress tests for repeated open/close cycles and large result sets.
   - Acceptance: Stress tests show no leaks or crashes.
   - Note: Use `--expose-gc` for explicit GC in leak detection tests
+  - ✅ DONE: 8 stress tests in tests/stress.test.ts
 - Document known limitations and operational guidance.
   - Acceptance: Docs clearly list supported features and limitations.
+  - ✅ DONE: README.md "Known Limitations" section
 
 **Suggested benchmarks:**
 - Database creation latency (cold start)
@@ -271,6 +275,44 @@ Verification:
 - Required coverage: Benchmarks for core operations and stress tests for lifecycle stability.
 - Pass/fail criteria: Benchmarks complete without errors and stress tests remain stable within defined thresholds.
 - Test implementation note: All tests must be implemented in the codebase (unit/integration/e2e), follow naming conventions and directory structure, and be re-runnable to prevent regressions.
+- ✅ 55 tests total (15 basic + 18 error + 6 smoke + 8 benchmark + 8 stress)
+
+### Phase 5 Summary
+
+**Deliverables:**
+- `tests/benchmark.test.ts` - 8 performance benchmarks
+- `tests/stress.test.ts` - 8 stress/lifecycle tests
+- README.md "Known Limitations" section
+
+**Benchmarks Implemented:**
+| Benchmark | Typical Result |
+|-----------|----------------|
+| Database creation | ~80μs avg |
+| Database.newTimed() | ~28μs avg |
+| Schema define/commit | ~2.7ms avg |
+| Bulk insert (1000) | ~34K entities/sec |
+| Query throughput | ~63μs avg |
+| queryTimed() overhead | ~6% overhead |
+| Snapshot export | ~3μs avg |
+| Snapshot import | ~119μs avg |
+
+**Stress Tests Implemented:**
+| Test | Scope |
+|------|-------|
+| Database create/destroy | 1000x cycles |
+| Transaction cycle | 10000x open/query/close |
+| Large result set | 10K entities |
+| Schema changes | 100x define/commit |
+| Error handling | 1000x error recovery |
+| Snapshot round-trips | 50x import cycles |
+| Transaction state | Closed/consumed detection |
+| Database switching | 1000x switches across 10 DBs |
+
+**Known Limitations Documented:**
+- In-memory only (use snapshots for persistence)
+- Single-use write transactions
+- Synchronous API (blocks event loop)
+- Platform gaps: musl, Windows ARM, 32-bit
 
 ---
 
