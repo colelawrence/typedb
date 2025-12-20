@@ -14,6 +14,17 @@ import {
   type PersistencePolicy,
   resolveStorage,
 } from './storage.js';
+import {
+  type TimingBreakdown,
+  createTimingBreakdown,
+  createDbCreationTimingBreakdown,
+} from './timing.js';
+import type {
+  TimedQueryResult,
+  TimedOperationResult,
+  WasmDatabaseCreationTiming,
+  CoreProfileSnapshot,
+} from './wasm-types.js';
 
 /**
  * A TypeDB embedded database instance.
@@ -108,6 +119,8 @@ export class Database {
    */
   static async open(name: string, options?: StorageOptions): Promise<Database> {
     const wasm = await initWasm();
+    const wasmProfiling = wasm as typeof wasm & { enableProfiling?: (enabled: boolean) => void };
+    wasmProfiling.enableProfiling?.(true);
     const wasmDb = new wasm.Database(name);
 
     const storage = resolveStorage(options);
@@ -405,5 +418,223 @@ export class Database {
     await using tx = await this.schema();
     await fn(tx);
     await tx.commit();
+  }
+
+  // ============================================================================
+  // Benchmark API (for performance analysis)
+  // ============================================================================
+
+  /**
+   * Open a database with timing information for benchmarking.
+   * Returns both the database and timing breakdown.
+   *
+   * @internal
+   */
+  static async _benchmarkOpen(
+    name: string,
+    options?: StorageOptions
+  ): Promise<{ database: Database; timing: TimingBreakdown }> {
+    const totalStart = performance.now();
+
+    const jsPreStart = performance.now();
+    const wasm = await initWasm();
+    const jsPreEnd = performance.now();
+
+    // Use timed WASM method
+    const timedResult = wasm.Database.newTimed(name) as {
+      database: WasmDatabase;
+      timing: WasmDatabaseCreationTiming;
+    };
+
+    const jsPostStart = performance.now();
+    const storage = resolveStorage(options);
+    const persistence = options?.persistence ?? (storage ? 'onClose' : 'manual');
+
+    const db = new Database(timedResult.database, name, storage, persistence);
+
+    // Load existing snapshot if storage is configured
+    if (storage) {
+      const snapshot = await storage.loadSnapshot(name);
+      if (snapshot) {
+        db.#wasmDb.importSnapshot(snapshot);
+      }
+    }
+    const jsPostEnd = performance.now();
+    const totalEnd = performance.now();
+
+    const timing = createDbCreationTimingBreakdown(
+      timedResult.timing,
+      jsPreEnd - jsPreStart,
+      jsPostEnd - jsPostStart,
+      totalEnd - totalStart
+    );
+
+    return { database: db, timing };
+  }
+
+  /**
+   * Execute a read query with timing breakdown for benchmarking.
+   *
+   * @internal
+   */
+  async _benchmarkQuery<T extends Row = Row>(
+    query: string
+  ): Promise<{ result: QueryResult<T>; timing: TimingBreakdown }> {
+    const totalStart = performance.now();
+
+    const jsPreStart = performance.now();
+    const tx = this.#wasmDb.transactionRead();
+    const jsPreEnd = performance.now();
+
+    try {
+      // Use timed WASM method
+      const timedRaw = tx.queryTimed(query) as TimedQueryResult;
+
+      const jsPostStart = performance.now();
+      if (!timedRaw.result.success) {
+        const { createError } = await import('./error.js');
+        throw createError(timedRaw.result.error!, 'query');
+      }
+      const result = createQueryResult<T>(timedRaw.result.columns, timedRaw.result.rows);
+      const jsPostEnd = performance.now();
+      const totalEnd = performance.now();
+
+      const wasm = await initWasm();
+      const wasmProfiling = wasm as typeof wasm & { takeProfile?: (id: bigint) => CoreProfileSnapshot | null };
+      const coreProfile =
+        timedRaw.profileId !== undefined ? wasmProfiling.takeProfile?.(BigInt(timedRaw.profileId)) ?? undefined : undefined;
+
+      const timing = createTimingBreakdown(
+        timedRaw.timing,
+        jsPreEnd - jsPreStart,
+        jsPostEnd - jsPostStart,
+        totalEnd - totalStart,
+        coreProfile
+      );
+
+      return { result, timing };
+    } finally {
+      tx.close();
+    }
+  }
+
+  /**
+   * Execute a write query with timing breakdown for benchmarking.
+   *
+   * @internal
+   */
+  async _benchmarkExecute(
+    query: string
+  ): Promise<{ rowCount: number; timing: TimingBreakdown }> {
+    const totalStart = performance.now();
+
+    const jsPreStart = performance.now();
+    const tx = this.#wasmDb.transactionWrite();
+    const jsPreEnd = performance.now();
+
+    // Use timed WASM method
+    const timedRaw = tx.executeTimed(query) as TimedOperationResult;
+
+    const jsPostStart = performance.now();
+    if (!timedRaw.result.success) {
+      const { createError } = await import('./error.js');
+      throw createError(timedRaw.result.error!, 'execute');
+    }
+    const jsPostEnd = performance.now();
+    const totalEnd = performance.now();
+
+    const wasm = await initWasm();
+    const wasmProfiling = wasm as typeof wasm & { takeProfile?: (id: bigint) => CoreProfileSnapshot | null };
+    const coreProfile =
+      timedRaw.profileId !== undefined ? wasmProfiling.takeProfile?.(BigInt(timedRaw.profileId)) ?? undefined : undefined;
+
+    const timing = createTimingBreakdown(
+      timedRaw.timing,
+      jsPreEnd - jsPreStart,
+      jsPostEnd - jsPostStart,
+      totalEnd - totalStart,
+      coreProfile
+    );
+
+    return { rowCount: timedRaw.result.rowCount ?? 0, timing };
+  }
+
+  /**
+   * Define schema with timing breakdown for benchmarking.
+   *
+   * @internal
+   */
+  async _benchmarkDefine(
+    schema: string
+  ): Promise<{ timing: TimingBreakdown }> {
+    const totalStart = performance.now();
+
+    const jsPreStart = performance.now();
+    const wasmTx = this.#wasmDb.transactionSchema();
+    const jsPreEnd = performance.now();
+
+    // Use timed WASM methods
+    const executeTimedRaw = wasmTx.executeTimed(schema) as TimedOperationResult;
+    if (!executeTimedRaw.result.success) {
+      wasmTx.rollback();
+      const { createError } = await import('./error.js');
+      throw createError(executeTimedRaw.result.error!, 'define');
+    }
+
+    const commitTimedRaw = wasmTx.commitTimed() as TimedOperationResult;
+
+    const jsPostStart = performance.now();
+    if (!commitTimedRaw.result.success) {
+      const { createError } = await import('./error.js');
+      throw createError(commitTimedRaw.result.error!, 'define');
+    }
+    const jsPostEnd = performance.now();
+    const totalEnd = performance.now();
+
+    const wasm = await initWasm();
+    const wasmProfiling = wasm as typeof wasm & { takeProfile?: (id: bigint) => CoreProfileSnapshot | null };
+    const executeCoreProfile =
+      executeTimedRaw.profileId !== undefined
+        ? wasmProfiling.takeProfile?.(BigInt(executeTimedRaw.profileId)) ?? undefined
+        : undefined;
+    const commitCoreProfile =
+      commitTimedRaw.profileId !== undefined
+        ? wasmProfiling.takeProfile?.(BigInt(commitTimedRaw.profileId)) ?? undefined
+        : undefined;
+
+    // Combine execute + commit timing
+    const combinedWasmTiming = {
+      parseUs: executeTimedRaw.timing.parseUs + commitTimedRaw.timing.parseUs,
+      compileUs: executeTimedRaw.timing.compileUs + commitTimedRaw.timing.compileUs,
+      executeUs: executeTimedRaw.timing.executeUs + commitTimedRaw.timing.executeUs,
+      serializeUs: executeTimedRaw.timing.serializeUs + commitTimedRaw.timing.serializeUs,
+      wasmTotalUs: executeTimedRaw.timing.wasmTotalUs + commitTimedRaw.timing.wasmTotalUs,
+    };
+
+    const combinedCoreProfile =
+      executeCoreProfile || commitCoreProfile
+        ? {
+            query: executeCoreProfile?.query,
+            transaction: commitCoreProfile?.transaction,
+          }
+        : undefined;
+
+    const timing = createTimingBreakdown(
+      combinedWasmTiming,
+      jsPreEnd - jsPreStart,
+      jsPostEnd - jsPostStart,
+      totalEnd - totalStart,
+      combinedCoreProfile
+    );
+
+    return { timing };
+  }
+
+  /**
+   * Get the internal WASM database for advanced benchmarking.
+   * @internal
+   */
+  _getWasmDb(): WasmDatabase {
+    return this.#wasmDb;
   }
 }

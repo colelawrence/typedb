@@ -67,6 +67,32 @@ export type {
 // Advanced: WASM utilities
 export { initWasm, initWasmWithBytes, isWasmReady } from './wasm.js';
 
+// Timing/Benchmarking types (for performance analysis)
+export {
+  createTimingBreakdown,
+  createDbCreationTimingBreakdown,
+} from './timing.js';
+export type {
+  TimingBreakdown,
+  BenchmarkSample,
+  MemorySnapshot,
+  TimingStats,
+  TimingBreakdownStats,
+  BenchmarkReport,
+  WasmTimingBreakdown,
+  WasmDatabaseCreationTiming,
+} from './timing.js';
+export type {
+  CoreProfileSnapshot,
+  QueryProfileSnapshot,
+  CompileProfileSnapshot,
+  StageProfileSnapshot,
+  StepProfileSnapshot,
+  TransactionProfileSnapshot,
+  CommitProfileSnapshot,
+  StorageCountersSnapshot,
+} from './wasm-types.js';
+
 // Meta-Graph: Dynamic schema management (TanStack Table-style API)
 export {
   createMetaGraph,

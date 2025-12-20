@@ -326,3 +326,125 @@ export interface SchemaResult {
   schema?: WasmSchemaSummary;
   error?: WasmError;
 }
+
+// ============================================================================
+// Timing Types (for benchmarking)
+// ============================================================================
+
+/**
+ * Timing breakdown from WASM side.
+ * All times are in microseconds (us).
+ */
+export interface WasmTimingBreakdown {
+  /** Time spent parsing the TypeQL query (us) */
+  parseUs: number;
+  /** Time spent compiling the query pipeline (us) */
+  compileUs: number;
+  /** Time spent executing the query and collecting results (us) */
+  executeUs: number;
+  /** Time spent serializing results to JS values (us) */
+  serializeUs: number;
+  /** Total WASM-side time (us) */
+  wasmTotalUs: number;
+}
+
+/**
+ * Timing for database creation from WASM.
+ */
+export interface WasmDatabaseCreationTiming {
+  /** Time to create the in-memory database (us) */
+  createUs: number;
+  /** Total time (us) */
+  totalUs: number;
+}
+
+/**
+ * Core profile snapshot from TypeDB (timings in microseconds).
+ */
+export interface CoreProfileSnapshot {
+  query?: QueryProfileSnapshot;
+  transaction?: TransactionProfileSnapshot;
+}
+
+export interface QueryProfileSnapshot {
+  enabled: boolean;
+  totalUs: number;
+  compile: CompileProfileSnapshot;
+  stages: StageProfileSnapshot[];
+}
+
+export interface CompileProfileSnapshot {
+  enabled: boolean;
+  translationUs: number;
+  validationUs: number;
+  annotationUs: number;
+  compilationUs: number;
+  totalUs: number;
+}
+
+export interface StageProfileSnapshot {
+  id: number;
+  description: string;
+  steps: StepProfileSnapshot[];
+}
+
+export interface StepProfileSnapshot {
+  description: string;
+  batches: number;
+  rows: number;
+  micros: number;
+  storageCounters?: StorageCountersSnapshot;
+}
+
+export interface TransactionProfileSnapshot {
+  enabled: boolean;
+  commit: CommitProfileSnapshot;
+}
+
+export interface CommitProfileSnapshot {
+  enabled: boolean;
+  commitSize: number;
+  totalUs: number;
+  typesValidationUs: number;
+  thingsFinaliseUs: number;
+  functionsFinaliseUs: number;
+  schemaUpdateStatisticsDurableWriteUs: number;
+  snapshotPutStatusesCheckUs: number;
+  snapshotCommitRecordCreateUs: number;
+  snapshotDurableWriteDataSubmitUs: number;
+  snapshotIsolationValidateUs: number;
+  snapshotDurableWriteDataConfirmUs: number;
+  snapshotStorageWriteUs: number;
+  snapshotIsolationManagerNotifyUs: number;
+  snapshotDurableWriteCommitStatusSubmitUs: number;
+  schemaUpdateCachesUpdateUs: number;
+  schemaUpdateStatisticsUpdateUs: number;
+  storageCounters?: StorageCountersSnapshot;
+}
+
+export interface StorageCountersSnapshot {
+  rawAdvance: number;
+  rawSeek: number;
+  advanceMvccVisible: number;
+  advanceMvccInvisible: number;
+  advanceMvccDeleted: number;
+}
+
+/**
+ * Result with timing information from WASM timed methods.
+ */
+export interface TimedResult<T> {
+  result: T;
+  timing: WasmTimingBreakdown;
+  profileId?: number;
+}
+
+/**
+ * Query result with timing breakdown.
+ */
+export type TimedQueryResult = TimedResult<QueryResult>;
+
+/**
+ * Operation result with timing breakdown.
+ */
+export type TimedOperationResult = TimedResult<OperationResult>;

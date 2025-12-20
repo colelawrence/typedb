@@ -23,6 +23,5 @@
     "noFallthroughCasesInSwitch": true
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "wasm", "src/**/*.test.ts"],
-  "references": [{ "path": "./tsconfig.test.json" }]
+  "exclude": ["node_modules", "dist", "wasm", "src/**/*.test.ts"]
 }
