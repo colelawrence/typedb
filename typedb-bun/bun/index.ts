@@ -337,4 +337,4 @@ export class TransactionSchema {
   }
 }
 
-export { TypedbBunError };
+export { TypedbBunError, type ErrorPayload } from "./ffi";
