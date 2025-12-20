@@ -73,3 +73,6 @@ server/assets/studio/
 
 node_modules
 .kyoto
+
+# Node native binaries
+typedb-node/*.node
