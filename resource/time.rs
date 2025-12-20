@@ -8,37 +8,25 @@
 //!
 //! This module provides time measurement abstractions that work on both native
 //! and WASM targets. On native platforms, it uses `std::time::Instant`. On WASM
-//! (wasm32 architecture), it provides a no-op implementation since monotonic
-//! clocks are not available on `wasm32-unknown-unknown`.
-//!
-//! # Why This Exists
-//!
-//! The `wasm32-unknown-unknown` target does not provide access to system time,
-//! so `std::time::Instant::now()` will panic with:
-//! "time not implemented on this platform"
-//!
-//! This module allows profiling code to compile and run on WASM without panicking,
-//! while still providing accurate timing on native platforms.
+//! it uses `web_time::Instant` which leverages `performance.now()` for accurate
+//! timing in browser and Node.js/Bun environments.
 
 use std::time::Duration;
 
 /// A WASM-compatible instant for measuring elapsed time.
 ///
 /// On native platforms, this wraps `std::time::Instant`.
-/// On WASM, this is a no-op that always returns zero duration.
+/// On WASM, this wraps `web_time::Instant` for accurate timing via performance.now().
 #[derive(Debug, Clone, Copy)]
 pub struct MaybeInstant {
     #[cfg(not(target_arch = "wasm32"))]
     inner: std::time::Instant,
     #[cfg(target_arch = "wasm32")]
-    _phantom: (),
+    inner: web_time::Instant,
 }
 
 impl MaybeInstant {
     /// Returns an instant corresponding to "now".
-    ///
-    /// On WASM, this returns a placeholder instant that will always
-    /// report zero elapsed time.
     #[inline]
     pub fn now() -> Self {
         #[cfg(not(target_arch = "wasm32"))]
@@ -47,38 +35,20 @@ impl MaybeInstant {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            Self { _phantom: () }
+            Self { inner: web_time::Instant::now() }
         }
     }
 
     /// Returns the amount of time elapsed since this instant.
-    ///
-    /// On WASM, this always returns `Duration::ZERO`.
     #[inline]
     pub fn elapsed(&self) -> Duration {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.inner.elapsed()
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            Duration::ZERO
-        }
+        self.inner.elapsed()
     }
 
     /// Returns the amount of time elapsed from another instant to this one.
-    ///
-    /// On WASM, this always returns `Duration::ZERO`.
     #[inline]
-    pub fn duration_since(&self, _earlier: Self) -> Duration {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.inner.duration_since(_earlier.inner)
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            Duration::ZERO
-        }
+    pub fn duration_since(&self, earlier: Self) -> Duration {
+        self.inner.duration_since(earlier.inner)
     }
 }
 

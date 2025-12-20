@@ -9,15 +9,39 @@ use std::{
     fmt,
     fmt::{Display, Formatter},
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicI8, AtomicU64, Ordering},
         Arc, RwLock,
     },
     time::Duration,
 };
 
 use itertools::Itertools;
+#[cfg(not(target_arch = "wasm32"))]
+use tracing::Level;
 
 use crate::time::MaybeInstant;
+
+static PROFILE_OVERRIDE: AtomicI8 = AtomicI8::new(-1);
+
+pub fn set_profiling_override(enabled: Option<bool>) {
+    let value = match enabled {
+        Some(true) => 1,
+        Some(false) => 0,
+        None => -1,
+    };
+    PROFILE_OVERRIDE.store(value, Ordering::SeqCst);
+}
+
+pub fn profiling_enabled() -> bool {
+    match PROFILE_OVERRIDE.load(Ordering::SeqCst) {
+        1 => true,
+        0 => false,
+        #[cfg(not(target_arch = "wasm32"))]
+        _ => tracing::enabled!(Level::TRACE),
+        #[cfg(target_arch = "wasm32")]
+        _ => false,
+    }
+}
 
 #[derive(Debug)]
 pub struct TransactionProfile {
@@ -45,6 +69,10 @@ impl TransactionProfile {
 
     pub fn commit_profile(&mut self) -> &mut CommitProfile {
         &mut self.commit_profile
+    }
+
+    pub fn snapshot(&self) -> TransactionProfileSnapshot {
+        TransactionProfileSnapshot { enabled: self.enabled, commit: self.commit_profile.snapshot() }
     }
 }
 
@@ -284,6 +312,32 @@ impl CommitProfile {
             Some(data) => data.counters.clone(),
         }
     }
+
+    pub fn snapshot(&self) -> CommitProfileSnapshot {
+        match &self.data {
+            None => CommitProfileSnapshot::disabled(),
+            Some(data) => CommitProfileSnapshot {
+                enabled: true,
+                commit_size: data.commit_size,
+                total_nanos: data.total.as_nanos() as u64,
+                types_validation_nanos: data.types_validation.as_nanos() as u64,
+                things_finalise_nanos: data.things_finalise.as_nanos() as u64,
+                functions_finalise_nanos: data.functions_finalise.as_nanos() as u64,
+                schema_update_statistics_durable_write_nanos: data.schema_update_statistics_durable_write.as_nanos() as u64,
+                snapshot_put_statuses_check_nanos: data.snapshot_put_statuses_check.as_nanos() as u64,
+                snapshot_commit_record_create_nanos: data.snapshot_commit_record_create.as_nanos() as u64,
+                snapshot_durable_write_data_submit_nanos: data.snapshot_durable_write_data_submit.as_nanos() as u64,
+                snapshot_isolation_validate_nanos: data.snapshot_isolation_validate.as_nanos() as u64,
+                snapshot_durable_write_data_confirm_nanos: data.snapshot_durable_write_data_confirm.as_nanos() as u64,
+                snapshot_storage_write_nanos: data.snapshot_storage_write.as_nanos() as u64,
+                snapshot_isolation_manager_notify_nanos: data.snapshot_isolation_manager_notify.as_nanos() as u64,
+                snapshot_durable_write_commit_status_submit_nanos: data.snapshot_durable_write_commit_status_submit.as_nanos() as u64,
+                schema_update_caches_update_nanos: data.schema_update_caches_update.as_nanos() as u64,
+                schema_update_statistics_update_nanos: data.schema_update_statistics_update.as_nanos() as u64,
+                storage_counters: data.counters.snapshot(),
+            },
+        }
+    }
 }
 
 /// Record the time different stages of a commit.
@@ -373,6 +427,23 @@ impl QueryProfile {
 
     pub fn stage_profiles(&self) -> &RwLock<HashMap<u64, Arc<StageProfile>>> {
         &self.stage_profiles
+    }
+
+    pub fn snapshot(&self) -> QueryProfileSnapshot {
+        let compile = self.compile_profile.snapshot();
+        let stage_profiles = self.stage_profiles.read().unwrap();
+        let mut stages = Vec::with_capacity(stage_profiles.len());
+        let mut total_nanos: u64 = compile.total_nanos;
+        for (id, profile) in stage_profiles.iter().sorted_by_key(|(id, _)| *id) {
+            let stage_snapshot = profile.snapshot(*id);
+            total_nanos += stage_snapshot
+                .steps
+                .iter()
+                .map(|step| step.nanos)
+                .sum::<u64>();
+            stages.push(stage_snapshot);
+        }
+        QueryProfileSnapshot { enabled: self.enabled, compile, stages, total_nanos }
     }
 }
 
@@ -471,6 +542,20 @@ impl CompileProfile {
             }
         }
     }
+
+    pub fn snapshot(&self) -> CompileProfileSnapshot {
+        match &self.data {
+            None => CompileProfileSnapshot::disabled(),
+            Some(data) => CompileProfileSnapshot {
+                enabled: true,
+                translation_nanos: data.translation.as_nanos() as u64,
+                validation_nanos: data.validation.as_nanos() as u64,
+                annotation_nanos: data.annotation.as_nanos() as u64,
+                compilation_nanos: data.compilation.as_nanos() as u64,
+                total_nanos: (data.translation + data.validation + data.annotation + data.compilation).as_nanos() as u64,
+            },
+        }
+    }
 }
 
 impl Display for CompileProfile {
@@ -555,6 +640,17 @@ impl StageProfile {
             Arc::new(StepProfile::new_disabled())
         }
     }
+
+    fn snapshot(&self, id: u64) -> StageProfileSnapshot {
+        let steps = self
+            .step_profiles
+            .read()
+            .unwrap()
+            .iter()
+            .map(|step| step.snapshot())
+            .collect();
+        StageProfileSnapshot { id, description: self.description.clone(), steps }
+    }
 }
 
 impl fmt::Display for StageProfile {
@@ -613,6 +709,19 @@ impl StepProfile {
             data.storage.clone()
         } else {
             StorageCounters::DISABLED
+        }
+    }
+
+    fn snapshot(&self) -> StepProfileSnapshot {
+        match &self.data {
+            None => StepProfileSnapshot::disabled(),
+            Some(data) => StepProfileSnapshot {
+                description: data.description.clone(),
+                batches: data.batches.load(Ordering::SeqCst),
+                rows: data.rows.load(Ordering::SeqCst),
+                nanos: data.nanos.load(Ordering::SeqCst),
+                storage_counters: data.storage.snapshot(),
+            },
         }
     }
 }
@@ -710,6 +819,16 @@ impl StorageCounters {
             counters.advance_mvcc_deleted.fetch_add(1, Ordering::Relaxed);
         }
     }
+
+    pub fn snapshot(&self) -> Option<StorageCountersSnapshot> {
+        self.counters.as_ref().map(|counters| StorageCountersSnapshot {
+            raw_advance: counters.raw_advance.load(Ordering::SeqCst),
+            raw_seek: counters.raw_seek.load(Ordering::SeqCst),
+            advance_mvcc_visible: counters.advance_mvcc_visible.load(Ordering::SeqCst),
+            advance_mvcc_invisible: counters.advance_mvcc_invisible.load(Ordering::SeqCst),
+            advance_mvcc_deleted: counters.advance_mvcc_deleted.load(Ordering::SeqCst),
+        })
+    }
 }
 
 impl Display for StorageCounters {
@@ -750,4 +869,119 @@ impl StorageCountersData {
             advance_mvcc_deleted: AtomicU64::new(0),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct TransactionProfileSnapshot {
+    pub enabled: bool,
+    pub commit: CommitProfileSnapshot,
+}
+
+#[derive(Debug, Clone)]
+pub struct CommitProfileSnapshot {
+    pub enabled: bool,
+    pub commit_size: usize,
+    pub total_nanos: u64,
+    pub types_validation_nanos: u64,
+    pub things_finalise_nanos: u64,
+    pub functions_finalise_nanos: u64,
+    pub schema_update_statistics_durable_write_nanos: u64,
+    pub snapshot_put_statuses_check_nanos: u64,
+    pub snapshot_commit_record_create_nanos: u64,
+    pub snapshot_durable_write_data_submit_nanos: u64,
+    pub snapshot_isolation_validate_nanos: u64,
+    pub snapshot_durable_write_data_confirm_nanos: u64,
+    pub snapshot_storage_write_nanos: u64,
+    pub snapshot_isolation_manager_notify_nanos: u64,
+    pub snapshot_durable_write_commit_status_submit_nanos: u64,
+    pub schema_update_caches_update_nanos: u64,
+    pub schema_update_statistics_update_nanos: u64,
+    pub storage_counters: Option<StorageCountersSnapshot>,
+}
+
+impl CommitProfileSnapshot {
+    fn disabled() -> Self {
+        Self {
+            enabled: false,
+            commit_size: 0,
+            total_nanos: 0,
+            types_validation_nanos: 0,
+            things_finalise_nanos: 0,
+            functions_finalise_nanos: 0,
+            schema_update_statistics_durable_write_nanos: 0,
+            snapshot_put_statuses_check_nanos: 0,
+            snapshot_commit_record_create_nanos: 0,
+            snapshot_durable_write_data_submit_nanos: 0,
+            snapshot_isolation_validate_nanos: 0,
+            snapshot_durable_write_data_confirm_nanos: 0,
+            snapshot_storage_write_nanos: 0,
+            snapshot_isolation_manager_notify_nanos: 0,
+            snapshot_durable_write_commit_status_submit_nanos: 0,
+            schema_update_caches_update_nanos: 0,
+            schema_update_statistics_update_nanos: 0,
+            storage_counters: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct QueryProfileSnapshot {
+    pub enabled: bool,
+    pub compile: CompileProfileSnapshot,
+    pub stages: Vec<StageProfileSnapshot>,
+    pub total_nanos: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct CompileProfileSnapshot {
+    pub enabled: bool,
+    pub translation_nanos: u64,
+    pub validation_nanos: u64,
+    pub annotation_nanos: u64,
+    pub compilation_nanos: u64,
+    pub total_nanos: u64,
+}
+
+impl CompileProfileSnapshot {
+    fn disabled() -> Self {
+        Self {
+            enabled: false,
+            translation_nanos: 0,
+            validation_nanos: 0,
+            annotation_nanos: 0,
+            compilation_nanos: 0,
+            total_nanos: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct StageProfileSnapshot {
+    pub id: u64,
+    pub description: String,
+    pub steps: Vec<StepProfileSnapshot>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StepProfileSnapshot {
+    pub description: String,
+    pub batches: u64,
+    pub rows: u64,
+    pub nanos: u64,
+    pub storage_counters: Option<StorageCountersSnapshot>,
+}
+
+impl StepProfileSnapshot {
+    fn disabled() -> Self {
+        Self { description: String::new(), batches: 0, rows: 0, nanos: 0, storage_counters: None }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct StorageCountersSnapshot {
+    pub raw_advance: u64,
+    pub raw_seek: u64,
+    pub advance_mvcc_visible: u64,
+    pub advance_mvcc_invisible: u64,
+    pub advance_mvcc_deleted: u64,
 }
