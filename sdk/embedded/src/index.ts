@@ -131,16 +131,5 @@ export type {
   ValueType,
 } from './schema-types.js';
 
-// Scenario Runner (for testing TypeQL scenarios in Markdown format)
-export {
-  parseScenario,
-  runScenario,
-} from './scenario-runner.js';
-export type {
-  Scenario,
-  Stage,
-  StageKind,
-  Expectation,
-  ScenarioResult,
-  StageResult,
-} from './scenario-runner.js';
+// Scenario Runner: REMOVED - Use Rust CLI instead:
+//   cargo run -p typeql-scenario-cli -- run ./scenarios/
