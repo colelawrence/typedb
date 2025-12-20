@@ -184,8 +184,8 @@ describe('Curriculum Discovery', () => {
     expect(files.length).toBeGreaterThan(0);
   });
 
-  test('finds social-network context', () => {
-    const contextPath = path.join(CONTEXTS_DIR, 'social-network');
+  test('finds S1 context', () => {
+    const contextPath = path.join(CONTEXTS_DIR, 'S1');
     expect(fs.existsSync(contextPath)).toBe(true);
     expect(fs.existsSync(path.join(contextPath, 'schema.tql'))).toBe(true);
     expect(fs.existsSync(path.join(contextPath, 'seed.tql'))).toBe(true);
@@ -244,7 +244,7 @@ match $p;
       const content = fs.readFileSync(filePath, 'utf-8');
       const lesson = parseCurriculumLesson(content, filePath);
       expect(lesson.id).toBe('koans-matching');
-      expect(lesson.context).toBe('social-network');
+      expect(lesson.context).toBe('S1');
       expect(lesson.blocks.length).toBeGreaterThan(0);
       console.log(`Parsed ${lesson.blocks.length} blocks from koans-matching`);
     }
