@@ -23,6 +23,8 @@
     "build:ts": "tsc",
     "build": "npm run build:wasm && npm run build:ts",
     "test": "bun test",
+    "test:wasm": "TYPEDB_BACKEND=wasm bun test",
+    "test:node": "TYPEDB_BACKEND=node bun test",
     "test:packaging": "bun run packaging-test/run-test.ts",
     "test:browser": "cd browser-tests && npm test",
     "test:browser:ui": "cd browser-tests && npm run test:ui",
@@ -35,12 +37,21 @@
     "database",
     "embedded",
     "wasm",
-    "graph"
+    "graph",
+    "node-api"
   ],
   "license": "MPL-2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/typedb/typedb"
+  },
+  "peerDependencies": {
+    "@typedb/embedded-node": ">=0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@typedb/embedded-node": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@types/bun": "^1.2.14",

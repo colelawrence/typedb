@@ -67,6 +67,17 @@ export type {
 // Advanced: WASM utilities
 export { initWasm, initWasmWithBytes, isWasmReady } from './wasm.js';
 
+// Backend selection (for choosing Node-API vs WASM)
+export {
+  getBackend,
+  getBackendType,
+  getBackendMode,
+  useBackend,
+  resetBackend,
+  isBackendAvailable,
+} from './backend/index.js';
+export type { Backend, BackendType, BackendMode } from './backend/index.js';
+
 // Timing/Benchmarking types (for performance analysis)
 export {
   createTimingBreakdown,

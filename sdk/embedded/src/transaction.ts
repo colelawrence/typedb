@@ -5,10 +5,10 @@
  */
 
 import type {
-  WasmTransactionRead,
-  WasmTransactionWrite,
-  WasmTransactionSchema,
-} from './wasm.js';
+  BackendReadTransaction,
+  BackendWriteTransaction,
+  BackendSchemaTransaction,
+} from './backend/types.js';
 import type { InternalQueryResult, InternalOperationResult, QueryResult, Row } from './result.js';
 import { createQueryResult } from './result.js';
 import { createError, TransactionError } from './error.js';
@@ -26,14 +26,14 @@ import type { SchemaSummary, InternalSchemaResult } from './schema-types.js';
 export class ReadTransaction implements AsyncDisposable {
   #closed = false;
 
-  constructor(private readonly wasmTx: WasmTransactionRead) {}
+  constructor(private readonly backendTx: BackendReadTransaction) {}
 
   /**
    * Execute a read query.
    */
   async query<T extends Row = Row>(query: string): Promise<QueryResult<T>> {
     this.#ensureOpen();
-    const raw = this.wasmTx.query(query) as InternalQueryResult;
+    const raw = await this.backendTx.query(query) as InternalQueryResult;
     if (!raw.success) {
       throw createError(raw.error!, 'query');
     }
@@ -74,7 +74,7 @@ export class ReadTransaction implements AsyncDisposable {
    */
   async schema(): Promise<SchemaSummary> {
     this.#ensureOpen();
-    const raw = (this.wasmTx as any).schema() as InternalSchemaResult;
+    const raw = await this.backendTx.schema() as InternalSchemaResult;
     if (!raw.success) {
       throw createError(raw.error as any, 'schema');
     }
@@ -86,7 +86,7 @@ export class ReadTransaction implements AsyncDisposable {
    */
   close(): void {
     if (!this.#closed) {
-      this.wasmTx.close();
+      this.backendTx.close();
       this.#closed = true;
     }
   }
@@ -121,14 +121,14 @@ export class SchemaTransaction implements AsyncDisposable {
   #committed = false;
   #rolledBack = false;
 
-  constructor(private readonly wasmTx: WasmTransactionSchema) {}
+  constructor(private readonly backendTx: BackendSchemaTransaction) {}
 
   /**
    * Execute a schema query (define, undefine, redefine).
    */
   async execute(query: string): Promise<void> {
     this.#ensureActive();
-    const raw = this.wasmTx.execute(query) as InternalOperationResult;
+    const raw = await this.backendTx.execute(query) as InternalOperationResult;
     if (!raw.success) {
       throw createError(raw.error!, 'schema');
     }
@@ -139,7 +139,7 @@ export class SchemaTransaction implements AsyncDisposable {
    */
   async commit(): Promise<void> {
     this.#ensureActive();
-    const raw = this.wasmTx.commit() as InternalOperationResult;
+    const raw = await this.backendTx.commit() as InternalOperationResult;
     this.#committed = true;
     if (!raw.success) {
       throw createError(raw.error!, 'schema.commit');
@@ -151,7 +151,7 @@ export class SchemaTransaction implements AsyncDisposable {
    */
   async rollback(): Promise<void> {
     if (!this.#committed && !this.#rolledBack) {
-      this.wasmTx.rollback();
+      this.backendTx.rollback();
       this.#rolledBack = true;
     }
   }
@@ -175,8 +175,8 @@ export class SchemaTransaction implements AsyncDisposable {
  * Internal: Execute a single write operation.
  * Not exposed directly - use db.execute() instead.
  */
-export function executeWrite(wasmTx: WasmTransactionWrite, query: string): number {
-  const raw = wasmTx.execute(query) as InternalOperationResult;
+export async function executeWrite(backendTx: BackendWriteTransaction, query: string): Promise<number> {
+  const raw = await backendTx.execute(query) as InternalOperationResult;
   if (!raw.success) {
     throw createError(raw.error!, 'write');
   }

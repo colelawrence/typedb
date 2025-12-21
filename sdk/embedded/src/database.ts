@@ -4,7 +4,11 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { initWasm, type WasmDatabase } from './wasm.js';
+import {
+  getBackend,
+  type Backend,
+  type BackendDatabase,
+} from './backend/index.js';
 import { ReadTransaction, SchemaTransaction, executeWrite } from './transaction.js';
 import { createQueryResult, type QueryResult, type Row } from './result.js';
 import type { InternalQueryResult } from './result.js';
@@ -20,10 +24,9 @@ import {
   createDbCreationTimingBreakdown,
 } from './timing.js';
 import type {
-  TimedQueryResult,
-  TimedOperationResult,
-  WasmDatabaseCreationTiming,
-  CoreProfileSnapshot,
+  TimedResult,
+  QueryResult as RawQueryResult,
+  OperationResult as RawOperationResult,
 } from './wasm-types.js';
 
 /**
@@ -68,18 +71,21 @@ import type {
  * ```
  */
 export class Database {
-  #wasmDb: WasmDatabase;
+  #backendDb: BackendDatabase;
+  #backend: Backend;
   #storage: StorageAdapter | undefined;
   #persistence: PersistencePolicy;
   #closed = false;
 
   private constructor(
-    wasmDb: WasmDatabase,
+    backendDb: BackendDatabase,
+    backend: Backend,
     public readonly name: string,
     storage: StorageAdapter | undefined,
     persistence: PersistencePolicy
   ) {
-    this.#wasmDb = wasmDb;
+    this.#backendDb = backendDb;
+    this.#backend = backend;
     this.#storage = storage;
     this.#persistence = persistence;
   }
@@ -118,21 +124,20 @@ export class Database {
    * ```
    */
   static async open(name: string, options?: StorageOptions): Promise<Database> {
-    const wasm = await initWasm();
-    const wasmProfiling = wasm as typeof wasm & { enableProfiling?: (enabled: boolean) => void };
-    wasmProfiling.enableProfiling?.(true);
-    const wasmDb = new wasm.Database(name);
+    const backend = await getBackend();
+    backend.enableProfiling(true);
+    const backendDb = await backend.createDatabase(name);
 
     const storage = resolveStorage(options);
     const persistence = options?.persistence ?? (storage ? 'onClose' : 'manual');
 
-    const db = new Database(wasmDb, name, storage, persistence);
+    const db = new Database(backendDb, backend, name, storage, persistence);
 
     // Load existing snapshot if storage is configured
     if (storage) {
       const snapshot = await storage.loadSnapshot(name);
       if (snapshot) {
-        db.#wasmDb.importSnapshot(snapshot);
+        await db.#backendDb.importSnapshot(snapshot);
       }
     }
 
@@ -169,9 +174,9 @@ export class Database {
    * ```
    */
   async query<T extends Row = Row>(query: string): Promise<QueryResult<T>> {
-    const tx = this.#wasmDb.transactionRead();
+    const tx = await this.#backendDb.transactionRead();
     try {
-      const raw = tx.query(query) as InternalQueryResult;
+      const raw = await tx.query(query) as InternalQueryResult;
       if (!raw.success) {
         const { createError } = await import('./error.js');
         throw createError(raw.error!, 'query');
@@ -210,7 +215,7 @@ export class Database {
    * ```
    */
   async execute(query: string): Promise<number> {
-    const tx = this.#wasmDb.transactionWrite();
+    const tx = await this.#backendDb.transactionWrite();
     return executeWrite(tx, query);
   }
 
@@ -259,7 +264,7 @@ export class Database {
           "Open the database with { storage: 'indexeddb' } to enable persistence."
       );
     }
-    const snapshot = this.#wasmDb.exportSnapshot();
+    const snapshot = await this.#backendDb.exportSnapshot();
     await this.#storage.saveSnapshot(this.name, snapshot);
   }
 
@@ -286,7 +291,7 @@ export class Database {
 
     // Persist if configured to do so on close
     if (this.#storage && this.#persistence === 'onClose') {
-      const snapshot = this.#wasmDb.exportSnapshot();
+      const snapshot = await this.#backendDb.exportSnapshot();
       await this.#storage.saveSnapshot(this.name, snapshot);
     }
 
@@ -331,7 +336,7 @@ export class Database {
    */
   async exportSnapshot(): Promise<Uint8Array> {
     this.#ensureOpen();
-    return this.#wasmDb.exportSnapshot();
+    return this.#backendDb.exportSnapshot();
   }
 
   /**
@@ -354,7 +359,7 @@ export class Database {
    */
   async importSnapshot(snapshot: Uint8Array): Promise<void> {
     this.#ensureOpen();
-    this.#wasmDb.importSnapshot(snapshot);
+    await this.#backendDb.importSnapshot(snapshot);
   }
 
   /**
@@ -381,8 +386,8 @@ export class Database {
    * ```
    */
   async read(): Promise<ReadTransaction> {
-    const wasmTx = this.#wasmDb.transactionRead();
-    return new ReadTransaction(wasmTx);
+    const backendTx = await this.#backendDb.transactionRead();
+    return new ReadTransaction(backendTx);
   }
 
   /**
@@ -398,8 +403,8 @@ export class Database {
    * ```
    */
   async schema(): Promise<SchemaTransaction> {
-    const wasmTx = this.#wasmDb.transactionSchema();
-    return new SchemaTransaction(wasmTx);
+    const backendTx = await this.#backendDb.transactionSchema();
+    return new SchemaTransaction(backendTx);
   }
 
   /**
@@ -437,26 +442,23 @@ export class Database {
     const totalStart = performance.now();
 
     const jsPreStart = performance.now();
-    const wasm = await initWasm();
+    const backend = await getBackend();
     const jsPreEnd = performance.now();
 
-    // Use timed WASM method
-    const timedResult = wasm.Database.newTimed(name) as {
-      database: WasmDatabase;
-      timing: WasmDatabaseCreationTiming;
-    };
+    // Use timed backend method
+    const timedResult = await backend.createDatabaseTimed(name);
 
     const jsPostStart = performance.now();
     const storage = resolveStorage(options);
     const persistence = options?.persistence ?? (storage ? 'onClose' : 'manual');
 
-    const db = new Database(timedResult.database, name, storage, persistence);
+    const db = new Database(timedResult.database, backend, name, storage, persistence);
 
     // Load existing snapshot if storage is configured
     if (storage) {
       const snapshot = await storage.loadSnapshot(name);
       if (snapshot) {
-        db.#wasmDb.importSnapshot(snapshot);
+        await db.#backendDb.importSnapshot(snapshot);
       }
     }
     const jsPostEnd = performance.now();
@@ -483,12 +485,12 @@ export class Database {
     const totalStart = performance.now();
 
     const jsPreStart = performance.now();
-    const tx = this.#wasmDb.transactionRead();
+    const tx = await this.#backendDb.transactionRead();
     const jsPreEnd = performance.now();
 
     try {
-      // Use timed WASM method
-      const timedRaw = tx.queryTimed(query) as TimedQueryResult;
+      // Use timed backend method
+      const timedRaw = await tx.queryTimed(query) as TimedResult<RawQueryResult>;
 
       const jsPostStart = performance.now();
       if (!timedRaw.result.success) {
@@ -499,10 +501,8 @@ export class Database {
       const jsPostEnd = performance.now();
       const totalEnd = performance.now();
 
-      const wasm = await initWasm();
-      const wasmProfiling = wasm as typeof wasm & { takeProfile?: (id: bigint) => CoreProfileSnapshot | null };
       const coreProfile =
-        timedRaw.profileId !== undefined ? wasmProfiling.takeProfile?.(BigInt(timedRaw.profileId)) ?? undefined : undefined;
+        timedRaw.profileId !== undefined ? this.#backend.takeProfile(timedRaw.profileId) ?? undefined : undefined;
 
       const timing = createTimingBreakdown(
         timedRaw.timing,
@@ -529,11 +529,11 @@ export class Database {
     const totalStart = performance.now();
 
     const jsPreStart = performance.now();
-    const tx = this.#wasmDb.transactionWrite();
+    const tx = await this.#backendDb.transactionWrite();
     const jsPreEnd = performance.now();
 
-    // Use timed WASM method
-    const timedRaw = tx.executeTimed(query) as TimedOperationResult;
+    // Use timed backend method
+    const timedRaw = await tx.executeTimed(query) as TimedResult<RawOperationResult>;
 
     const jsPostStart = performance.now();
     if (!timedRaw.result.success) {
@@ -543,10 +543,8 @@ export class Database {
     const jsPostEnd = performance.now();
     const totalEnd = performance.now();
 
-    const wasm = await initWasm();
-    const wasmProfiling = wasm as typeof wasm & { takeProfile?: (id: bigint) => CoreProfileSnapshot | null };
     const coreProfile =
-      timedRaw.profileId !== undefined ? wasmProfiling.takeProfile?.(BigInt(timedRaw.profileId)) ?? undefined : undefined;
+      timedRaw.profileId !== undefined ? this.#backend.takeProfile(timedRaw.profileId) ?? undefined : undefined;
 
     const timing = createTimingBreakdown(
       timedRaw.timing,
@@ -570,18 +568,18 @@ export class Database {
     const totalStart = performance.now();
 
     const jsPreStart = performance.now();
-    const wasmTx = this.#wasmDb.transactionSchema();
+    const schemaTx = await this.#backendDb.transactionSchema();
     const jsPreEnd = performance.now();
 
-    // Use timed WASM methods
-    const executeTimedRaw = wasmTx.executeTimed(schema) as TimedOperationResult;
+    // Use timed backend methods
+    const executeTimedRaw = await schemaTx.executeTimed(schema) as TimedResult<RawOperationResult>;
     if (!executeTimedRaw.result.success) {
-      wasmTx.rollback();
+      schemaTx.rollback();
       const { createError } = await import('./error.js');
       throw createError(executeTimedRaw.result.error!, 'define');
     }
 
-    const commitTimedRaw = wasmTx.commitTimed() as TimedOperationResult;
+    const commitTimedRaw = await schemaTx.commitTimed() as TimedResult<RawOperationResult>;
 
     const jsPostStart = performance.now();
     if (!commitTimedRaw.result.success) {
@@ -591,15 +589,13 @@ export class Database {
     const jsPostEnd = performance.now();
     const totalEnd = performance.now();
 
-    const wasm = await initWasm();
-    const wasmProfiling = wasm as typeof wasm & { takeProfile?: (id: bigint) => CoreProfileSnapshot | null };
     const executeCoreProfile =
       executeTimedRaw.profileId !== undefined
-        ? wasmProfiling.takeProfile?.(BigInt(executeTimedRaw.profileId)) ?? undefined
+        ? this.#backend.takeProfile(executeTimedRaw.profileId) ?? undefined
         : undefined;
     const commitCoreProfile =
       commitTimedRaw.profileId !== undefined
-        ? wasmProfiling.takeProfile?.(BigInt(commitTimedRaw.profileId)) ?? undefined
+        ? this.#backend.takeProfile(commitTimedRaw.profileId) ?? undefined
         : undefined;
 
     // Combine execute + commit timing
@@ -631,10 +627,18 @@ export class Database {
   }
 
   /**
-   * Get the internal WASM database for advanced benchmarking.
+   * Get the current backend type.
    * @internal
    */
-  _getWasmDb(): WasmDatabase {
-    return this.#wasmDb;
+  _getBackendType(): 'wasm' | 'node' {
+    return this.#backend.type;
+  }
+
+  /**
+   * Get the internal backend database for advanced use.
+   * @internal
+   */
+  _getBackendDb(): BackendDatabase {
+    return this.#backendDb;
   }
 }
