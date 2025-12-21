@@ -143,7 +143,7 @@ function generateFileSystemData(config: FileSystemConfig): GeneratedData {
   // Root folder
   folderPaths.push("/");
   foldersByLevel[0].push("/");
-  folderInserts.push(`$f0 isa folder, has name "root", has path "/";`);
+  folderInserts.push(`$folder_0 isa folder, has name "root", has path "/";`);
 
   // Generate nested folders
   for (let level = 1; level <= config.depth; level++) {
@@ -160,7 +160,7 @@ function generateFileSystemData(config: FileSystemConfig): GeneratedData {
         foldersByLevel[level].push(folderPath);
         folderParents.set(folderPath, parentPath);
 
-        folderInserts.push(`$f${folderCount} isa folder, has name "${folderName}", has path "${folderPath}";`);
+        folderInserts.push(`$folder_${folderCount} isa folder, has name "${folderName}", has path "${folderPath}";`);
       }
     }
   }
@@ -182,7 +182,7 @@ function generateFileSystemData(config: FileSystemConfig): GeneratedData {
       const fileSize = Math.floor(Math.random() * 10000) + 100;
 
       filePaths.push(filePath);
-      fileInserts.push(`$file${fileCount} isa file, has name "${fileName}", has path "${filePath}", has file-size ${fileSize};`);
+      fileInserts.push(`$file_${fileCount} isa file, has name "${fileName}", has path "${filePath}", has file-size ${fileSize};`);
 
       // File containment relation
       fileRelations.push(
@@ -196,14 +196,14 @@ function generateFileSystemData(config: FileSystemConfig): GeneratedData {
     const userName = `user_${i}`;
     const userEmail = `${userName}@example.com`;
     userNames.push(userName);
-    userInserts.push(`$u${i} isa user, has name "${userName}", has email "${userEmail}";`);
+    userInserts.push(`$user_${i} isa user, has name "${userName}", has email "${userEmail}";`);
   }
 
   // Generate groups
   for (let i = 0; i < config.groupCount; i++) {
     const groupName = i < 3 ? ["admins", "editors", "viewers"][i] : `group_${i}`;
     groupNames.push(groupName);
-    groupInserts.push(`$g${i} isa user-group, has name "${groupName}";`);
+    groupInserts.push(`$group_${i} isa user-group, has name "${groupName}";`);
   }
 
   // Combine entities by type (each type gets its own batch to avoid variable conflicts)
@@ -931,6 +931,108 @@ describe("File System Permissions", () => {
     console.log(`  Path: user -> engineers -> managers -> admins -> super-admins -> file`);
     console.log(`  Found: ${result.rowCount} permission path`);
     console.log(`  Latency: ${elapsed.toFixed(2)}ms`);
+
+    readTx.close();
+  });
+
+  test("query compilation caching demo - same query, different users", () => {
+    console.log("\n📁 QUERY COMPILATION CACHING DEMO");
+    console.log("   Running identical query pattern 50x to show caching effect\n");
+
+    const db = new Database("fs_caching_demo");
+    const schemaTx = db.transactionSchema();
+    schemaTx.execute(FILE_SYSTEM_SCHEMA);
+    schemaTx.commit();
+
+    // Use small config for faster execution
+    const data = generateFileSystemData(smallConfig);
+    insertGeneratedData(db, data);
+
+    const readTx = db.transactionRead();
+
+    // Record timing for many iterations - same query pattern, cycling through users
+    const iterations = 50;
+    const timings: { iteration: number; user: string; totalMs: number; parseUs: number; executeUs: number }[] = [];
+
+    console.log("   First 10 queries (showing timing breakdown):");
+    console.log("   ─".repeat(40));
+    console.log("   #   User       Total    Parse    Execute");
+    console.log("   ─".repeat(40));
+
+    for (let i = 0; i < iterations; i++) {
+      const userName = data.userNames[i % data.userNames.length];
+      const start = performance.now();
+      const result = readTx.queryTimed(`
+        match
+          $user isa user, has name "${userName}";
+          (group: $group, member: $user) isa group-membership;
+          $folder isa folder;
+          (grantee: $group, target: $folder) isa permission-grant;
+        limit 1;
+      `);
+      const totalMs = performance.now() - start;
+
+      expect(result.result.success).toBe(true);
+      timings.push({
+        iteration: i,
+        user: userName,
+        totalMs,
+        parseUs: result.timing.parseUs,
+        executeUs: result.timing.executeUs,
+      });
+
+      // Show first 10 queries with breakdown
+      if (i < 10) {
+        const label = i === 0 ? "← FIRST (cold)" : "";
+        console.log(
+          `   ${String(i + 1).padStart(2)}  ${userName.padEnd(10)} ${totalMs.toFixed(2).padStart(6)}ms  ${(result.timing.parseUs / 1000).toFixed(2).padStart(6)}ms  ${(result.timing.executeUs / 1000).toFixed(3).padStart(7)}ms  ${label}`
+        );
+      }
+    }
+    console.log(`   ... (${iterations - 10} more queries)`);
+
+    // Calculate percentiles on total time
+    const sorted = [...timings].sort((a, b) => a.totalMs - b.totalMs);
+    const p50 = sorted[Math.floor(sorted.length * 0.50)];
+    const p90 = sorted[Math.floor(sorted.length * 0.90)];
+    const p95 = sorted[Math.floor(sorted.length * 0.95)];
+    const p99 = sorted[Math.floor(sorted.length * 0.99)];
+    const min = sorted[0];
+    const max = sorted[sorted.length - 1];
+    const avg = timings.reduce((sum, t) => sum + t.totalMs, 0) / timings.length;
+
+    console.log(`\n   ─${"─".repeat(39)}`);
+    console.log(`   PERCENTILE BREAKDOWN (${timings.length} queries):`);
+    console.log(`   ─${"─".repeat(39)}`);
+    console.log(`   min:   ${min.totalMs.toFixed(2).padStart(6)}ms  (query #${min.iteration + 1})`);
+    console.log(`   p50:   ${p50.totalMs.toFixed(2).padStart(6)}ms  (query #${p50.iteration + 1})`);
+    console.log(`   p90:   ${p90.totalMs.toFixed(2).padStart(6)}ms  (query #${p90.iteration + 1})`);
+    console.log(`   p95:   ${p95.totalMs.toFixed(2).padStart(6)}ms  (query #${p95.iteration + 1})`);
+    console.log(`   p99:   ${p99.totalMs.toFixed(2).padStart(6)}ms  (query #${p99.iteration + 1})`);
+    console.log(`   max:   ${max.totalMs.toFixed(2).padStart(6)}ms  (query #${max.iteration + 1})`);
+    console.log(`   avg:   ${avg.toFixed(2).padStart(6)}ms`);
+
+    // Show the compilation overhead
+    const firstQuery = timings[0];
+    const restAvg = timings.slice(1).reduce((sum, t) => sum + t.totalMs, 0) / (timings.length - 1);
+    const avgParseUs = timings.reduce((sum, t) => sum + t.parseUs, 0) / timings.length;
+    const avgExecUs = timings.reduce((sum, t) => sum + t.executeUs, 0) / timings.length;
+
+    console.log(`\n   ─${"─".repeat(39)}`);
+    console.log(`   TIMING BREAKDOWN (averages):`);
+    console.log(`   ─${"─".repeat(39)}`);
+    console.log(`   Parse/compile:  ${(avgParseUs / 1000).toFixed(2)}ms`);
+    console.log(`   Execute:        ${(avgExecUs / 1000).toFixed(3)}ms`);
+    console.log(`   Total:          ${avg.toFixed(2)}ms`);
+
+    console.log(`\n   ─${"─".repeat(39)}`);
+    console.log(`   FIRST vs SUBSEQUENT:`);
+    console.log(`   ─${"─".repeat(39)}`);
+    console.log(`   First query:    ${firstQuery.totalMs.toFixed(2)}ms (parse: ${(firstQuery.parseUs / 1000).toFixed(2)}ms)`);
+    console.log(`   Subsequent avg: ${restAvg.toFixed(2)}ms`);
+    if (firstQuery.totalMs > restAvg) {
+      console.log(`   Speedup:        ${(firstQuery.totalMs / restAvg).toFixed(1)}x faster after first`);
+    }
 
     readTx.close();
   });

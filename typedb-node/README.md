@@ -218,6 +218,95 @@ if (timed.profileId !== undefined) {
 enableProfiling(false);
 ```
 
+## Performance Testing
+
+The test suite includes comprehensive performance benchmarks and stress tests. These are useful for understanding TypeDB's performance characteristics and for regression testing.
+
+### Running Performance Tests
+
+```bash
+cd typedb-node
+
+# Run all tests (includes performance output)
+bun test
+
+# Run specific test suites
+bun test tests/benchmark.test.ts      # Core performance benchmarks
+bun test tests/stress.test.ts         # Lifecycle stability tests
+bun test tests/filesystem-permissions.test.ts  # Complex schema stress tests
+```
+
+### File System Permissions Test
+
+The `filesystem-permissions.test.ts` models a realistic file system with hierarchical folders, users, groups, and UNIX-like permissions. It demonstrates:
+
+- Complex schema with inheritance (`fs-object @abstract`, `folder sub fs-object`)
+- Multi-level relationships (folder hierarchy, group membership, permission grants)
+- Permission queries: "Does user X have access to file Y?"
+- Performance characteristics at scale
+
+```bash
+# Run the file system permissions tests
+bun test tests/filesystem-permissions.test.ts
+
+# Example output:
+# 📁 STRESS: Medium File System
+#   Scale: 40 folders, 200 files, 20 users, 5 groups
+#   Insert time: 1553ms
+#   Permission query (50x): avg 4.28ms, min 1.26ms, max 6.31ms
+```
+
+### Query Timing Analysis
+
+The tests reveal where time is spent in query execution:
+
+| Phase | Typical Time | Notes |
+|-------|--------------|-------|
+| Parse/compile | ~0.9ms | Fixed overhead per query |
+| Execute | <0.001ms | Sub-microsecond for simple queries |
+| Serialize | ~0.01ms | Depends on result size |
+
+**Key insight:** Query compilation dominates latency. Actual in-memory graph traversal is extremely fast (sub-microsecond). There is no prepared statement caching - each query string is fully parsed and compiled.
+
+```bash
+# See detailed timing breakdown
+bun test tests/filesystem-permissions.test.ts -t "query compilation caching"
+
+# Example output:
+#    TIMING BREAKDOWN (averages):
+#    Parse/compile:  0.89ms
+#    Execute:        0.000ms
+#    Total:          0.90ms
+```
+
+### Using queryTimed() for Profiling
+
+```typescript
+import { Database, enableProfiling, takeProfile } from "@typedb/embedded-node";
+
+const db = new Database("perf_test");
+// ... setup schema and data ...
+
+const tx = db.transactionRead();
+
+// Get timing breakdown for any query
+const result = tx.queryTimed("match $x isa person; limit 10;");
+
+console.log(`Parse:   ${result.timing.parseUs}μs`);
+console.log(`Execute: ${result.timing.executeUs}μs`);
+console.log(`Total:   ${result.timing.nativeTotalUs}μs`);
+
+// For detailed execution profiling
+enableProfiling(true);
+const profiled = tx.queryTimed("match $x isa person;");
+if (profiled.profileId !== undefined) {
+  const profile = takeProfile(profiled.profileId);
+  // profile.query.stages[0].steps shows each execution step
+  // with row counts, timing, and storage counters
+}
+enableProfiling(false);
+```
+
 ## Result Types
 
 ### QueryResult
@@ -347,11 +436,12 @@ typedb-node/
 │   ├── convert.rs      # Type conversions
 │   └── timing.rs       # Profiling types
 ├── tests/
-│   ├── basic.test.ts      # Core functionality tests
-│   ├── benchmark.test.ts  # Performance benchmarks
-│   ├── errors.test.ts     # Error utilities tests
-│   ├── smoke.test.ts      # Packaging validation tests
-│   └── stress.test.ts     # Lifecycle stability tests
+│   ├── basic.test.ts                  # Core functionality tests
+│   ├── benchmark.test.ts              # Performance benchmarks
+│   ├── errors.test.ts                 # Error utilities tests
+│   ├── filesystem-permissions.test.ts # Complex schema stress tests
+│   ├── smoke.test.ts                  # Packaging validation tests
+│   └── stress.test.ts                 # Lifecycle stability tests
 ├── index.js            # Platform-specific loader
 ├── index.d.ts          # TypeScript declarations
 ├── errors.js           # Error utilities
