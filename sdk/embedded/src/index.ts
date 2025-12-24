@@ -168,5 +168,79 @@ export type {
   ValueType,
 } from './schema-types.js';
 
-// Scenario Runner: REMOVED - Use Rust CLI instead:
-//   cargo run -p typeql-scenario-cli -- run ./scenarios/
+// Dynamic Schema: Runtime collection/property creation (Notion/Airtable-style)
+export {
+  CustomCollectionManager,
+  CustomPropertyManager,
+  initializeDynamicSchema,
+  isDynamicSchemaInitialized,
+  ensureDynamicSchemaInitialized,
+  DYNAMIC_SCHEMA_DEFINITION,
+} from './dynamic-schema.js';
+export type {
+  ScalarKind as DynamicScalarKind,
+  CustomCollectionDef,
+  CustomPropertyDef,
+} from './dynamic-schema.js';
+
+// Property Resolver: Unified static + dynamic property resolution
+export {
+  PropertyResolver,
+  resolveCollection,
+  listAllCollections,
+} from './property-resolver.js';
+export type {
+  PropertySource,
+  ResolvedProperty,
+  ResolvedCollection,
+  StaticPropertyDef,
+} from './property-resolver.js';
+
+// Editable Graph: Values as first-class entities with provenance
+export {
+  createEditableGraph,
+  initializeEditableGraph,
+  isEditableGraphInitialized,
+  ensureEditableGraphInitialized,
+  EditSourceManager,
+  EditManager,
+  CellValueManager,
+  EDITABLE_GRAPH_SCHEMA,
+} from './editable-graph.js';
+export type {
+  EditSourceType,
+  ValueKind,
+  EditSource,
+  Edit,
+  CellRef,
+  EditableValue,
+  ValueWithProvenance,
+  ValueFilter,
+  EditableGraph,
+} from './editable-graph.js';
+
+// Record Graph: Records, lists, properties, and assignments with provenance
+export {
+  createRecordGraph,
+  initializeRecordGraph,
+  isRecordGraphInitialized,
+  RecordManager,
+  ListManager,
+  EditSourceManager as RecordEditSourceManager,
+  EditManager as RecordEditManager,
+  AssignmentManager,
+  RECORD_GRAPH_SCHEMA,
+} from './record-graph.js';
+export type {
+  PropertyKind,
+  EditSourceType as RecordEditSourceType,
+  Record,
+  List,
+  Property,
+  PropertyAssignment,
+  EditSource as RecordEditSource,
+  Edit as RecordEdit,
+  AssignmentWithProvenance,
+  ValueFilter as RecordValueFilter,
+  RecordGraph,
+} from './record-graph.js';

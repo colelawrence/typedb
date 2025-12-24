@@ -54,6 +54,8 @@
 
 import type { Database } from './database.js';
 import { buildMetaGraphSchema, saveMetaGraphSchema } from './schema-introspection.js';
+import { CustomCollectionManager, CustomPropertyManager, ensureDynamicSchemaInitialized } from './dynamic-schema.js';
+import { PropertyResolver, resolveCollection, listAllCollections, type ResolvedCollection } from './property-resolver.js';
 
 // ============================================================================
 // Core Types
@@ -195,6 +197,22 @@ export interface CollectionInstance<C extends ColumnsShape> {
   search(filters: FiltersFor<C>): string;
   insertRecord(db: Database, data: Partial<Record<keyof C, unknown>>): Promise<number>;
   query(db: Database, filters: FiltersFor<C>): Promise<any>;
+
+  /**
+   * Get a property manager for adding custom properties to this static collection.
+   * Requires the collection to be registered in the dynamic schema metadata.
+   *
+   * @param db - The TypeDB database instance
+   * @param collectionId - The UUID of the collection in custom_collection metadata
+   */
+  customProperties(db: Database, collectionId: string): CustomPropertyManager;
+
+  /**
+   * Get a property resolver for this collection (static + dynamic properties).
+   *
+   * @param db - The TypeDB database instance
+   */
+  getPropertyResolver(db: Database): PropertyResolver;
 }
 
 function createCollectionInstance<C extends ColumnsShape>(
@@ -268,6 +286,19 @@ function createCollectionInstance<C extends ColumnsShape>(
     return query;
   };
 
+  const customProperties = (db: Database, collectionId: string): CustomPropertyManager => {
+    return new CustomPropertyManager(db, collectionId, typeName);
+  };
+
+  const getPropertyResolver = (db: Database): PropertyResolver => {
+    const staticProps = listColumns().map((c) => ({
+      displayName: c.name,
+      typeName: attrName(c.name as keyof C),
+      kind: c.kind,
+    }));
+    return new PropertyResolver(db, typeName, staticProps);
+  };
+
   return {
     name,
     typeName,
@@ -279,6 +310,8 @@ function createCollectionInstance<C extends ColumnsShape>(
     search,
     insertRecord: (db, data) => db.execute(insert(data)),
     query: (db, filters) => db.query(search(filters)),
+    customProperties,
+    getPropertyResolver,
   };
 }
 
@@ -409,7 +442,7 @@ export interface MetaGraphInstance<
   listRelations(): Array<{ name: string; from: string; to: string }>;
 
   toTypeQLDefine(): string;
-  apply(db: Database, opts?: { persistMetadata?: boolean }): Promise<void>;
+  apply(db: Database, opts?: { persistMetadata?: boolean; initDynamicSchema?: boolean }): Promise<void>;
 
   getUISchema(collectionName: keyof Collections & string): CollectionUISchema;
   buildQuery(collectionName: keyof Collections & string, state: QueryState): string;
@@ -418,6 +451,33 @@ export interface MetaGraphInstance<
     collectionName: keyof Collections & string,
     state: QueryState
   ): Promise<any>;
+
+  // Dynamic schema integration
+  /**
+   * Get a CustomCollectionManager for creating dynamic collections at runtime.
+   */
+  getDynamicSchemaManager(db: Database): CustomCollectionManager;
+
+  /**
+   * List all collections including both static (from this graph) and dynamic.
+   */
+  listAllCollectionsAsync(db: Database): Promise<ResolvedCollection[]>;
+
+  /**
+   * Resolve a collection by display name or type name.
+   * Works for both static and dynamic collections.
+   */
+  resolveCollectionAsync(db: Database, nameOrType: string): Promise<ResolvedCollection | null>;
+
+  /**
+   * Build a query with async property resolution (supports dynamic properties).
+   * Use this when querying with user-facing property names that might be dynamic.
+   */
+  buildQueryAsync(
+    db: Database,
+    collectionName: keyof Collections & string,
+    state: QueryState
+  ): Promise<string>;
 }
 
 // ============================================================================
@@ -476,12 +536,15 @@ export function createMetaGraph<
 
   const apply = async (
     db: Database,
-    opts: { persistMetadata?: boolean } = {}
+    opts: { persistMetadata?: boolean; initDynamicSchema?: boolean } = {}
   ): Promise<void> => {
     await db.define(toTypeQLDefine());
     if (opts.persistMetadata) {
       const schema = buildMetaGraphSchema(def);
       await saveMetaGraphSchema(db, schema);
+    }
+    if (opts.initDynamicSchema) {
+      await ensureDynamicSchemaInitialized(db);
     }
   };
 
@@ -652,6 +715,145 @@ export function createMetaGraph<
     return db.query(buildQuery(collectionName, state));
   };
 
+  // Dynamic schema integration methods
+  const getDynamicSchemaManager = (db: Database): CustomCollectionManager => {
+    return new CustomCollectionManager(db);
+  };
+
+  const getStaticCollectionsMap = (): Map<string, string> => {
+    const map = new Map<string, string>();
+    for (const name of Object.keys(def.collections)) {
+      map.set(name, `col_${name}`);
+    }
+    return map;
+  };
+
+  const listAllCollectionsAsync = async (db: Database): Promise<ResolvedCollection[]> => {
+    return listAllCollections(db, getStaticCollectionsMap());
+  };
+
+  const resolveCollectionAsync = async (
+    db: Database,
+    nameOrType: string
+  ): Promise<ResolvedCollection | null> => {
+    return resolveCollection(db, nameOrType, getStaticCollectionsMap());
+  };
+
+  const buildQueryAsync = async (
+    db: Database,
+    collectionName: keyof Collections & string,
+    state: QueryState
+  ): Promise<string> => {
+    const col = getCollection(collectionName);
+    const resolver = col.getPropertyResolver(db);
+    const mainVar = '$r';
+    const clauses: string[] = [];
+    const orBlocks: string[] = [];
+    let varCounter = 0;
+
+    const nextVar = () => `$v${varCounter++}`;
+
+    clauses.push(`${mainVar} isa ${col.typeName}`);
+
+    // Resolve property names asynchronously
+    for (const [propName, filter] of Object.entries(state.propertyFilters)) {
+      const resolved = await resolver.resolve(propName);
+      if (!resolved) {
+        // Fall back to static property lookup
+        const attrName = col.attrName(propName);
+        applyFilter(attrName, filter, mainVar, clauses, orBlocks);
+      } else {
+        applyFilter(resolved.typeName, filter, mainVar, clauses, orBlocks);
+      }
+    }
+
+    // Relation filters (same as sync version)
+    const relationParts: string[] = [];
+    const negationParts: string[] = [];
+
+    for (const [relName, filter] of Object.entries(state.relationFilters)) {
+      const relation = getRelation(relName);
+      const isFromThisCollection = relation.from.collection === collectionName;
+      const targetCollection = isFromThisCollection
+        ? getCollection(relation.to.collection)
+        : getCollection(relation.from.collection);
+      const myRole = isFromThisCollection ? relation.from.role : relation.to.role;
+      const targetRole = isFromThisCollection ? relation.to.role : relation.from.role;
+
+      if (filter.type === 'exists') {
+        const relPattern = `(${myRole}: ${mainVar}, ${targetRole}: ${nextVar()}) isa ${relation.typeName}`;
+        if (filter.negated) {
+          negationParts.push(`not { ${relPattern}; }`);
+        } else {
+          relationParts.push(relPattern);
+        }
+      } else if (filter.type === 'linkedTo') {
+        const targetVar = nextVar();
+        relationParts.push(
+          `(${myRole}: ${mainVar}, ${targetRole}: ${targetVar}) isa ${relation.typeName}`
+        );
+        relationParts.push(`${targetVar} isa ${targetCollection.typeName}`);
+
+        for (const [propName, propFilter] of Object.entries(filter.targetFilters)) {
+          const attrName = targetCollection.attrName(propName);
+          if (propFilter.type === 'eq') {
+            relationParts.push(`${targetVar} has ${attrName} ${escapeValue(propFilter.value)}`);
+          } else if (propFilter.type === 'in' && propFilter.values.length > 0) {
+            const parts = propFilter.values.map(
+              (v) => `{ ${targetVar} has ${attrName} ${escapeValue(v)}; }`
+            );
+            orBlocks.push(parts.join(' or '));
+          }
+        }
+      }
+    }
+
+    let query = `match ${clauses.join(', ')}`;
+    if (relationParts.length > 0) {
+      query += `; ${relationParts.join('; ')}`;
+    }
+    query += ';';
+
+    if (orBlocks.length > 0) {
+      query += ' ' + orBlocks.join('; ') + ';';
+    }
+
+    if (negationParts.length > 0) {
+      query += ' ' + negationParts.join(' ') + ';';
+    }
+
+    return query;
+  };
+
+  // Helper function for buildQueryAsync
+  function applyFilter(
+    attrName: string,
+    filter: FilterValue,
+    mainVar: string,
+    clauses: string[],
+    orBlocks: string[]
+  ): void {
+    switch (filter.type) {
+      case 'eq':
+        clauses.push(`has ${attrName} ${escapeValue(filter.value)}`);
+        break;
+      case 'in':
+        if (filter.values.length > 0) {
+          const parts = filter.values.map(
+            (v) => `{ ${mainVar} has ${attrName} ${escapeValue(v)}; }`
+          );
+          orBlocks.push(parts.join(' or '));
+        }
+        break;
+      case 'range':
+        if (filter.gte !== undefined) clauses.push(`has ${attrName} >= ${filter.gte}`);
+        if (filter.gt !== undefined) clauses.push(`has ${attrName} > ${filter.gt}`);
+        if (filter.lte !== undefined) clauses.push(`has ${attrName} <= ${filter.lte}`);
+        if (filter.lt !== undefined) clauses.push(`has ${attrName} < ${filter.lt}`);
+        break;
+    }
+  }
+
   return {
     def,
     collection: getCollection,
@@ -663,6 +865,10 @@ export function createMetaGraph<
     getUISchema,
     buildQuery,
     executeQuery,
+    getDynamicSchemaManager,
+    listAllCollectionsAsync,
+    resolveCollectionAsync,
+    buildQueryAsync,
   };
 }
 
