@@ -17,9 +17,9 @@
 
 import { Database } from './database.js';
 import { ParseError, SchemaError, DataError, TypeDBError } from './error.js';
-import { splitTypeQLStatements } from '../../../typedb-web-studio/src/curriculum/typeql-statement-splitter.js';
 import * as fs from 'fs';
 import * as path from 'path';
+import { splitTypeQLStatements } from './typeql-statement-splitter.js';
 
 // ============================================================================
 // Types
@@ -173,7 +173,7 @@ function parseAttributes(attrsStr: string): Record<string, string> {
   const attrs: Record<string, string> = {};
   // Match key=value or key="value" (value can contain hyphens for IDs)
   const regex = /(\w+)=(?:"([^"]*)"|([a-zA-Z0-9_-]+))/g;
-  let match;
+  let match: null | RegExpExecArray;
   while ((match = regex.exec(attrsStr)) !== null) {
     attrs[match[1]] = match[2] ?? match[3];
   }
@@ -276,32 +276,34 @@ async function validateBlock(db: Database, block: CodeBlock): Promise<BlockResul
       case 'example':
       case 'readonly':
         // Execute and check results
-        const queryResult = await db.query(block.typeql);
-        result.rowCount = queryResult.rowCount;
-
-        // Check expectations
-        if (block.expect === 'results' && queryResult.rowCount === 0) {
-          result.success = false;
-          result.expected = 'results (rowCount > 0)';
-          result.actual = `rowCount = 0`;
-        }
-
-        if (block.expect === 'empty' && queryResult.rowCount > 0) {
-          result.success = false;
-          result.expected = 'empty (rowCount = 0)';
-          result.actual = `rowCount = ${queryResult.rowCount}`;
-        }
-
-        if (block.min !== undefined && queryResult.rowCount < block.min) {
-          result.success = false;
-          result.expected = `min ${block.min} rows`;
-          result.actual = `${queryResult.rowCount} rows`;
-        }
-
-        if (block.max !== undefined && queryResult.rowCount > block.max) {
-          result.success = false;
-          result.expected = `max ${block.max} rows`;
-          result.actual = `${queryResult.rowCount} rows`;
+        {
+          const queryResult = await db.query(block.typeql);
+          result.rowCount = queryResult.rowCount;
+          
+          // Check expectations
+          if (block.expect === 'results' && queryResult.rowCount === 0) {
+            result.success = false;
+            result.expected = 'results (rowCount > 0)';
+            result.actual = `rowCount = 0`;
+          }
+          
+          if (block.expect === 'empty' && queryResult.rowCount > 0) {
+            result.success = false;
+            result.expected = 'empty (rowCount = 0)';
+            result.actual = `rowCount = ${queryResult.rowCount}`;
+          }
+          
+          if (block.min !== undefined && queryResult.rowCount < block.min) {
+            result.success = false;
+            result.expected = `min ${block.min} rows`;
+            result.actual = `${queryResult.rowCount} rows`;
+          }
+          
+          if (block.max !== undefined && queryResult.rowCount > block.max) {
+            result.success = false;
+            result.expected = `max ${block.max} rows`;
+            result.actual = `${queryResult.rowCount} rows`;
+          }
         }
         break;
 
@@ -316,7 +318,7 @@ async function validateBlock(db: Database, block: CodeBlock): Promise<BlockResul
           // Check error type matches
           if (block.error) {
             const actualType = getErrorType(e);
-            if (actualType !== block.error && block.error !== 'any') {
+            if (actualType !== block.error) {
               result.success = false;
               result.expected = `error type: ${block.error}`;
               result.actual = `error type: ${actualType}`;
@@ -336,7 +338,7 @@ async function validateBlock(db: Database, block: CodeBlock): Promise<BlockResul
       // Expected to fail
       if (block.error) {
         const actualType = getErrorType(e);
-        if (actualType !== block.error && block.error !== 'any') {
+        if (actualType !== block.error) {
           result.success = false;
           result.expected = `error type: ${block.error}`;
           result.actual = `error type: ${actualType}`;
