@@ -150,7 +150,7 @@ class NodeBackendImpl implements Backend {
   }
 
   async createDatabase(name: string): Promise<BackendDatabase> {
-    return new NodeDatabaseAdapter(new this.getModule().Database(name));
+    return new NodeDatabaseAdapter(new (this.getModule()).Database(name));
   }
 
   async createDatabaseTimed(name: string): Promise<TimedDatabaseCreation> {
