@@ -5,52 +5,72 @@ import {
   withCStringAndHandle,
   unwrapBinary,
   unwrapJson,
-  type ErrorPayload,
   type LibraryHandle,
   TypedbBunError,
 } from "./ffi";
 
-export type QueryResult = {
-  success: boolean;
-  columns: string[];
-  rows: Array<{ values: Array<{ variable: string; value: unknown }> }>;
-  rowCount: number;
-  error?: ErrorPayload;
-};
+// Re-export all types from types.ts
+export type {
+  // Attribute value types
+  WasmAttributeValue,
+  WasmStringValue,
+  WasmIntegerValue,
+  WasmDoubleValue,
+  WasmBooleanValue,
+  WasmDateValue,
+  WasmDateTimeValue,
+  WasmDateTimeTzValue,
+  WasmDurationValue,
+  WasmDecimalValue,
+  WasmStructValue,
+  // Query value types
+  WasmValue,
+  WasmEntityValue,
+  WasmRelationValue,
+  WasmAttributeValueWrapper,
+  WasmTypeValue,
+  WasmComputedValue,
+  WasmThingListValue,
+  WasmValueListValue,
+  WasmNoneValue,
+  // Row/column types
+  WasmColumnValue,
+  WasmRow,
+  // Result types
+  QueryResult,
+  OperationResult,
+  SchemaResult,
+  // Error types
+  ErrorKind,
+  ErrorLocation,
+  WasmError,
+  // Schema types
+  WasmSchemaSummary,
+  WasmEntityTypeSchema,
+  WasmRelationTypeSchema,
+  WasmAttributeTypeSchema,
+  WasmRoleTypeSchema,
+  WasmOwnsSchema,
+  WasmPlaysSchema,
+  WasmRelatesSchema,
+  WasmCardinalityConstraint,
+  WasmValueConstraint,
+  WasmRangeConstraint,
+  // Timing types
+  TimingBreakdown,
+  TimedResult,
+  DatabaseCreationTiming,
+} from "./types.ts";
 
-export type OperationResult = {
-  success: boolean;
-  message: string;
-  rowCount?: number;
-  error?: ErrorPayload;
-};
+import type {
+  QueryResult,
+  OperationResult,
+  SchemaResult,
+  TimedResult,
+  DatabaseCreationTiming,
+} from "./types.ts";
 
-export type SchemaResult = {
-  success: boolean;
-  schema?: unknown;
-  error?: ErrorPayload;
-};
-
-export type TimingBreakdown = {
-  parseUs: number;
-  compileUs: number;
-  executeUs: number;
-  serializeUs: number;
-  wasmTotalUs: number;
-};
-
-export type TimedResult<T> = {
-  result: T;
-  timing: TimingBreakdown;
-  profileId?: number;
-};
-
-export type DatabaseCreationTiming = {
-  createUs: number;
-  totalUs: number;
-};
-
-export type DatabaseNewTimed = {
+type DatabaseNewTimed = {
   handle: number;
   timing: DatabaseCreationTiming;
 };

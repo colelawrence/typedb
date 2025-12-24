@@ -1,15 +1,12 @@
 import { dlopen, FFIType, read, toArrayBuffer, ptr } from "bun:ffi";
 import path from "node:path";
 import { existsSync } from "node:fs";
+import type { WasmError } from "./types.ts";
 
 const HEADER_LEN = 1 + 8;
 
-export type ErrorPayload = {
-  kind: string;
-  message: string;
-  location?: { line: number; column: number; snippet?: string };
-  hint?: string;
-};
+/** @deprecated Use WasmError instead */
+export type ErrorPayload = WasmError;
 
 export class TypedbBunError extends Error {
   readonly payload: ErrorPayload;

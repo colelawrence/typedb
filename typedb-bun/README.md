@@ -131,15 +131,106 @@ throws a plain `Error` to distinguish client misuse from server errors.
 
 ### Result types
 
-- `QueryResult`: `{ success, columns, rows, rowCount, error? }`
+#### QueryResult
+
+```ts
+interface QueryResult {
+  success: boolean;
+  columns: string[];
+  rows: WasmRow[];
+  rowCount: number;
+  error?: WasmError;
+}
+
+interface WasmRow {
+  values: WasmColumnValue[];
+}
+
+interface WasmColumnValue {
+  variable: string;
+  value: WasmValue;
+}
+```
+
+#### WasmValue (discriminated by `kind`)
+
+Query results contain values discriminated by `kind`:
+
+| Kind | Fields | Description |
+|------|--------|-------------|
+| `entity` | `typeName`, `iid` | Entity instance |
+| `relation` | `typeName`, `iid` | Relation instance |
+| `attribute` | `typeName`, `value: WasmAttributeValue` | Attribute instance |
+| `type` | `category`, `label` | Type from schema query |
+| `value` | `value: WasmAttributeValue` | Computed/aggregate value |
+| `thingList` | `items: WasmValue[]` | List of things |
+| `valueList` | `items: WasmAttributeValue[]` | List of values |
+| `none` | — | Null/absent value |
+
+Example type narrowing:
+
+```ts
+for (const col of row.values) {
+  switch (col.value.kind) {
+    case "entity":
+      console.log(`Entity ${col.value.typeName} (iid: ${col.value.iid})`);
+      break;
+    case "attribute":
+      console.log(`Attribute ${col.value.typeName}: ${col.value.value.value}`);
+      break;
+    // ... handle other kinds
+  }
+}
+```
+
+#### WasmAttributeValue (discriminated by `type`)
+
+Attribute values are discriminated by `type`:
+
+| Type | `value` type | Description |
+|------|--------------|-------------|
+| `string` | `string` | String value |
+| `integer` | `number` | Integer value |
+| `double` | `number` | Floating-point value |
+| `boolean` | `boolean` | Boolean value |
+| `date` | `string` | ISO date string |
+| `dateTime` | `string` | ISO datetime string |
+| `dateTimeTz` | `string` | ISO datetime with timezone |
+| `duration` | `string` | ISO duration string |
+| `decimal` | `string` | Decimal (string to preserve precision) |
+| `struct` | `string` | Debug string representation (not JSON) |
+
+#### SchemaResult
+
+```ts
+interface SchemaResult {
+  success: boolean;
+  schema?: WasmSchemaSummary;
+  error?: WasmError;
+}
+
+interface WasmSchemaSummary {
+  entityTypes: WasmEntityTypeSchema[];
+  relationTypes: WasmRelationTypeSchema[];
+  attributeTypes: WasmAttributeTypeSchema[];
+  roleTypes: WasmRoleTypeSchema[];
+}
+```
+
+Each type schema includes `label`, `isAbstract`, `supertype?`, `doc?`, and type-specific fields like `owns`, `plays`, `relates`, `valueType`, etc.
+
+#### Other result types
+
 - `OperationResult`: `{ success, message, rowCount?, error? }`
-- `SchemaResult`: `{ success, schema?, error? }`
 - `TimedResult<T>`: `{ result: T, timing, profileId? }`
 - `DatabaseCreationTiming`: `{ createUs, totalUs }`
+- `TimingBreakdown`: `{ parseUs, compileUs, executeUs, serializeUs, wasmTotalUs }`
 
 ### Errors
 
-- `TypedbBunError`: Thrown for FFI error payloads (snapshot import/export, profiling).
+- `TypedbBunError`: Thrown for FFI error payloads (snapshot import/export, profiling). Has a `payload` property of type `WasmError`.
+- `WasmError`: Structured error with `kind`, `message`, `location?`, `hint?`. (Also exported as `ErrorPayload` for backwards compatibility.)
+- `ErrorKind`: `"parseError" | "schemaError" | "typeError" | "dataError" | "transactionError" | "internalError"`
 - `Error`: Thrown for misuse of the convenience API (use-after-close).
 
 ## Lifecycle notes
@@ -149,9 +240,87 @@ throws a plain `Error` to distinguish client misuse from server errors.
 - Schema transactions are consumed after `commit()` or `rollback()`.
 - Read transactions can be reused for multiple queries.
 
+## Query patterns
+
+TypeQL 3 supports several query patterns in the embedded environment.
+
+### Supported patterns
+
+**Schema queries** return `kind: "type"` values:
+
+```ts
+// Match entity types
+read.query("match entity $type;");
+
+// Match relation types
+read.query("match relation $type;");
+
+// Match attribute types
+read.query("match attribute $type;");
+
+// Match subtypes
+read.query("match $type sub person;");
+```
+
+**Aggregates** use `reduce` and return `kind: "value"`:
+
+```ts
+// Count
+read.query("match $p isa person; reduce $count = count;");
+
+// Sum, mean, min, max
+read.query("match $p isa person, has age $a; reduce $sum = sum($a);");
+read.query("match $p isa person, has age $a; reduce $avg = mean($a);");
+read.query("match $p isa person, has age $a; reduce $min = min($a), $max = max($a);");
+
+// Groupby
+read.query("match $p isa person, has category $cat; reduce $count = count groupby $cat;");
+```
+
+**Pipeline stages** for projection and pagination:
+
+```ts
+// Select specific columns
+read.query("match $p isa person, has name $n, has age $a; select $n, $a;");
+
+// Sort results
+read.query("match $p isa person, has age $a; sort $a asc;");
+
+// Limit and offset
+read.query("match $p isa person; limit 10;");
+read.query("match $p isa person, has age $a; sort $a; offset 5; limit 10;");
+```
+
+### Unsupported patterns
+
+**Fetch projections** are not supported in embedded TypeDB:
+
+```ts
+// This returns an error
+read.query('match $p isa person; fetch { "name": $p.name };');
+// Error: "Cannot use a Fetch query to return ConceptRows"
+```
+
+**Type binding syntax** (`match $t type X;`) is not valid TypeQL 3:
+
+```ts
+// Use schema queries instead
+read.query("match entity $type;");  // ✓ Correct
+read.query("match $t type person;"); // ✗ Parse error
+```
+
+### List return types
+
+The `thingList` and `valueList` kinds exist in the type system but no TypeQL syntax to produce them in the embedded environment is confirmed. Standard queries return individual rows. No tests exist for these kinds because the triggering syntax is unsupported.
+
 ## Tests
 
 ```
 bun test typedb-bun/tests/ffi/lifecycle.test.ts
 bun test typedb-bun/tests/ffi/convenience.test.ts
+bun test typedb-bun/tests/ffi/types.test.ts
+bun test typedb-bun/tests/ffi/return-types.test.ts
+bun test typedb-bun/tests/ffi/schema-introspection.test.ts
+bun test typedb-bun/tests/ffi/query-patterns.test.ts
+bun test typedb-bun/tests/ffi/edge-cases.test.ts
 ```
