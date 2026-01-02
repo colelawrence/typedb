@@ -625,12 +625,26 @@ impl<Durability> MVCCStorage<Durability> {
     /// This replaces all data in the storage. Only call this when no transactions
     /// are active.
     #[cfg(not(feature = "rocksdb"))]
-    pub fn import_snapshot(&mut self, bytes: &[u8]) -> Result<SequenceNumber, StorageOpenError> {
+    pub fn import_snapshot(&mut self, bytes: &[u8]) -> Result<SequenceNumber, StorageOpenError>
+    where
+        Durability: DurabilityClient,
+    {
         let watermark_number = self.keyspaces
             .import_snapshot_with_watermark(bytes)
             .map_err(|source| StorageOpenError::Keyspace { source })?;
         let watermark = SequenceNumber::new(watermark_number);
+
+        // The next sequence number should be watermark + 1
+        let next_sequence = watermark.next();
+
+        // Reset both the isolation manager and the durability client to the same sequence number
         self.isolation_manager.reset_to_watermark(watermark);
+        self.durability_client.reset_to_sequence(next_sequence)
+            .map_err(|typedb_source| StorageOpenError::DurabilityClientWrite {
+                name: (*self.name).clone(),
+                typedb_source
+            })?;
+
         Ok(watermark)
     }
 }

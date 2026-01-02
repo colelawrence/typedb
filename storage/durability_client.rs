@@ -92,8 +92,15 @@ pub trait DurabilityClient {
     fn iter_unsequenced_type_from_start<Record: UnsequencedDurabilityRecord>(
         &self,
     ) -> Result<impl Iterator<Item = Result<Record, DurabilityClientError>>, DurabilityClientError> {
-        self.iter_unsequenced_type_from(SequenceNumber::MIN)
+        self.iter_unsequenced_type_from::<Record>(SequenceNumber::MIN)
     }
+
+    /// Reset the durability client's sequence number to a specific value.
+    /// This is used after importing a snapshot to synchronize with the isolation manager.
+    ///
+    /// For WAL-based durability, this is typically not supported (returns error).
+    /// For NoopDurabilityClient (WASM), this resets the internal counter.
+    fn reset_to_sequence(&mut self, sequence_number: SequenceNumber) -> Result<(), DurabilityClientError>;
 
     fn find_last_unsequenced_type<Record: UnsequencedDurabilityRecord>(
         &self,
@@ -219,6 +226,12 @@ impl DurabilityClient for WALClient {
     fn reset(&mut self) -> Result<(), DurabilityClientError> {
         self.wal.reset().map_err(|err| DurabilityClientError::ServiceError { source: err })
     }
+
+    fn reset_to_sequence(&mut self, _sequence_number: SequenceNumber) -> Result<(), DurabilityClientError> {
+        // WAL-based durability doesn't support resetting to arbitrary sequence numbers
+        // This is only used for WASM snapshot import
+        Err(DurabilityClientError::UnsupportedOperation { operation: "reset_to_sequence".to_string() })
+    }
 }
 
 // ============================================================================
@@ -316,6 +329,11 @@ impl DurabilityClient for NoopDurabilityClient {
         self.next_sequence_number.store(1, Ordering::SeqCst);
         Ok(())
     }
+
+    fn reset_to_sequence(&mut self, sequence_number: SequenceNumber) -> Result<(), DurabilityClientError> {
+        self.next_sequence_number.store(sequence_number.number(), Ordering::SeqCst);
+        Ok(())
+    }
 }
 
 typedb_error! {
@@ -323,6 +341,7 @@ typedb_error! {
         SerializeError(1, "Durability client failed to serialise/deserialise durability record", source: Arc<bincode::Error>),
         ServiceError(2, "Error from durability service.", source: DurabilityServiceError),
         CompressionError(3, "Error while compressing durability record.", source: Arc<io::Error>),
+        UnsupportedOperation(4, "Operation '{operation}' is not supported by this durability client.", operation: String),
     }
 }
 

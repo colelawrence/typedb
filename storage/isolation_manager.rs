@@ -400,10 +400,14 @@ impl Timeline {
 
     /// Create a new timeline with a specific watermark and next sequence number.
     /// Used after importing a snapshot to restore the correct state.
+    ///
+    /// The window must start at `next_sequence_number` (not watermark) because that's
+    /// where the next write transaction will be allocated. The watermark represents
+    /// the last committed sequence, while next_sequence_number is watermark + 1.
     #[cfg(not(feature = "rocksdb"))]
     fn new_with_watermark(watermark: SequenceNumber, next_sequence_number: SequenceNumber) -> Timeline {
-        // Create a window that covers from the watermark onwards
-        let windows = VecDeque::from([Arc::new(TimelineWindow::new(watermark))]);
+        // Window starts at next_sequence_number where writes will begin
+        let windows = VecDeque::from([Arc::new(TimelineWindow::new(next_sequence_number))]);
         Timeline { windows: RwLock::new(windows), watermark: AtomicU64::new(watermark.number()) }
     }
 

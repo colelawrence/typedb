@@ -683,6 +683,10 @@ impl Database<NoopDurabilityClient> {
         // Reset query cache
         self.query_cache.force_reset(&thing_statistics);
 
+        // Reset schema write transaction state to avoid stale queue from pre-import state
+        *self.schema_write_transaction_exclusivity.lock().expect("Lock poisoned") =
+            (false, 0, VecDeque::with_capacity(100));
+
         Ok(())
     }
 }
